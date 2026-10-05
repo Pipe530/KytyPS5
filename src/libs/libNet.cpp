@@ -2036,35 +2036,35 @@ struct TrophyLocalization {
 };
 
 static constexpr std::array<TrophyLocalization, 30> TROPHY_LOCALIZATIONS = {{
-    {"ja-JP", "????????", {"", "????", "????", "????", "????"}},
+    {"ja-JP", "トロフィーを獲得", {"", "プラチナ", "ゴールド", "シルバー", "ブロンズ"}},
     {"en-US", "TROPHY EARNED", {"", "Platinum", "Gold", "Silver", "Bronze"}},
-    {"fr-FR", "TROPH?E OBTENU", {"", "Platine", "Or", "Argent", "Bronze"}},
+    {"fr-FR", "TROPHÉE OBTENU", {"", "Platine", "Or", "Argent", "Bronze"}},
     {"es-ES", "TROFEO OBTENIDO", {"", "Platino", "Oro", "Plata", "Bronce"}},
-    {"de-DE", "TROPH?E ERHALTEN", {"", "Platin", "Gold", "Silber", "Bronze"}},
+    {"de-DE", "TROPHÄE ERHALTEN", {"", "Platin", "Gold", "Silber", "Bronze"}},
     {"it-IT", "TROFEO OTTENUTO", {"", "Platino", "Oro", "Argento", "Bronzo"}},
     {"nl-NL", "TROFEE BEHAALD", {"", "Platina", "Goud", "Zilver", "Brons"}},
-    {"pt-PT", "TROF?U CONQUISTADO", {"", "Platina", "Ouro", "Prata", "Bronze"}},
-    {"ru-RU", "?????? ???????", {"", "???????", "??????", "???????", "??????"}},
-    {"ko-KR", "??? ??", {"", "????", "??", "??", "???"}},
-    {"zh-Hant", "????", {"", "??", "?", "?", "?"}},
-    {"zh-Hans", "????", {"", "??", "?", "?", "?"}},
+    {"pt-PT", "TROFÉU CONQUISTADO", {"", "Platina", "Ouro", "Prata", "Bronze"}},
+    {"ru-RU", "ТРОФЕЙ ПОЛУЧЕН", {"", "Платина", "Золото", "Серебро", "Бронза"}},
+    {"ko-KR", "트로피 획득", {"", "플래티넘", "골드", "실버", "브론즈"}},
+    {"zh-Hant", "獲得獎盃", {"", "白金", "金", "銀", "銅"}},
+    {"zh-Hans", "获得奖杯", {"", "白金", "金", "银", "铜"}},
     {"fi-FI", "TROFEE SAATU", {"", "Platina", "Kulta", "Hopea", "Pronssi"}},
-    {"sv-SE", "TROF? ERH?LLEN", {"", "Platina", "Guld", "Silver", "Brons"}},
-    {"da-DK", "TROF? OPN?ET", {"", "Platin", "Guld", "S?lv", "Bronze"}},
-    {"no-NO", "TROFE MOTTATT", {"", "Platina", "Gull", "S?lv", "Bronse"}},
-    {"pl-PL", "ZDOBYTO TROFEUM", {"", "Platyna", "Z?oto", "Srebro", "Br?z"}},
-    {"pt-BR", "TROF?U CONQUISTADO", {"", "Platina", "Ouro", "Prata", "Bronze"}},
+    {"sv-SE", "TROFÉ ERHÅLLEN", {"", "Platina", "Guld", "Silver", "Brons"}},
+    {"da-DK", "TROFÆ OPNÅET", {"", "Platin", "Guld", "Sølv", "Bronze"}},
+    {"no-NO", "TROFE MOTTATT", {"", "Platina", "Gull", "Sølv", "Bronse"}},
+    {"pl-PL", "ZDOBYTO TROFEUM", {"", "Platyna", "Złoto", "Srebro", "Brąz"}},
+    {"pt-BR", "TROFÉU CONQUISTADO", {"", "Platina", "Ouro", "Prata", "Bronze"}},
     {"en-GB", "TROPHY EARNED", {"", "Platinum", "Gold", "Silver", "Bronze"}},
-    {"tr-TR", "KUPA KAZANILDI", {"", "Platin", "Alt?n", "G?m??", "Bronz"}},
+    {"tr-TR", "KUPA KAZANILDI", {"", "Platin", "Altın", "Gümüş", "Bronz"}},
     {"es-419", "TROFEO OBTENIDO", {"", "Platino", "Oro", "Plata", "Bronce"}},
-    {"ar-AE", "?? ?????? ??? ?????", {"", "???????", "????", "???", "??????"}},
-    {"fr-CA", "TROPH?E OBTENU", {"", "Platine", "Or", "Argent", "Bronze"}},
-    {"cs-CZ", "TROFEJ Z?SK?NA", {"", "Platina", "Zlato", "St??bro", "Bronz"}},
-    {"hu-HU", "TR?FEA MEGSZEREZVE", {"", "Platina", "Arany", "Ez?st", "Bronz"}},
-    {"el-GR", "??????? ?????????", {"", "??????????", "?????", "????????", "???????"}},
-    {"ro-RO", "TROFEU OB?INUT", {"", "Platin?", "Aur", "Argint", "Bronz"}},
-    {"th-TH", "????????????????", {"", "????????", "???", "????", "??????"}},
-    {"vi-VN", "?? NH?N C?P", {"", "B?ch kim", "V?ng", "B?c", "??ng"}},
+    {"ar-AE", "تم الحصول على الكأس", {"", "بلاتيني", "ذهبي", "فضي", "برونزي"}},
+    {"fr-CA", "TROPHÉE OBTENU", {"", "Platine", "Or", "Argent", "Bronze"}},
+    {"cs-CZ", "TROFEJ ZÍSKÁNA", {"", "Platina", "Zlato", "Stříbro", "Bronz"}},
+    {"hu-HU", "TRÓFEA MEGSZEREZVE", {"", "Platina", "Arany", "Ezüst", "Bronz"}},
+    {"el-GR", "ΤΡΟΠΑΙΟ ΚΕΡΔΗΘΗΚΕ", {"", "Πλατινένιο", "Χρυσό", "Ασημένιο", "Χάλκινο"}},
+    {"ro-RO", "TROFEU OBȚINUT", {"", "Platină", "Aur", "Argint", "Bronz"}},
+    {"th-TH", "ได้รับถ้วยรางวัล", {"", "แพลตินัม", "ทอง", "เงิน", "ทองแดง"}},
+    {"vi-VN", "ĐÃ NHẬN CÚP", {"", "Bạch kim", "Vàng", "Bạc", "Đồng"}},
     {"id-ID", "TROFI DIDAPATKAN", {"", "Platina", "Emas", "Perak", "Perunggu"}},
 }};
 
@@ -2075,6 +2075,22 @@ static bool                                    g_trophy_metadata_loaded = false;
 static bool                                    g_trophy_metadata_scanned = false;
 static bool                                    g_trophy_metadata_missing_logged = false;
 static bool                                    g_trophy_unlocks_loaded = false;
+
+struct TrophyStatCondition {
+	int         trophy_id = 0;
+	int64_t     target    = 0;
+	std::string comparator;
+};
+
+struct UdsStatRule {
+	std::string input;
+	int         stat_id = 0;
+};
+
+static std::unordered_map<int, std::vector<TrophyStatCondition>> g_trophy_stat_conditions;
+static std::unordered_map<std::string, std::vector<UdsStatRule>> g_uds_event_rules;
+static bool                                                      g_uds_rules_loaded  = false;
+static bool                                                      g_uds_rules_scanned = false;
 
 using TrophyJson = nlohmann::json;
 
@@ -2133,6 +2149,20 @@ static bool ParseTrophyId(const TrophyJson& value, int* id) {
 		return false;
 	}
 	*id = parsed;
+	return true;
+}
+
+static bool ParseTrophyNumber(const TrophyJson& value, int64_t* number) {
+	const auto text = TrophyJsonString(value);
+	if (text.empty()) {
+		return false;
+	}
+	int64_t parsed = 0;
+	const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), parsed);
+	if (error != std::errc {} || end != text.data() + text.size()) {
+		return false;
+	}
+	*number = parsed;
 	return true;
 }
 
@@ -2416,6 +2446,17 @@ static bool LoadTrophyPackage(const std::filesystem::path& path,
 		const auto has_reward = definition.find("hasReward");
 		item.has_reward = has_reward != definition.end() && has_reward->is_boolean() &&
 		                  has_reward->get<bool>();
+
+		const auto condition = definition.find("unlockCondition");
+		if (condition != definition.end() && condition->is_object()) {
+			int     stat_id = 0;
+			int64_t target  = 0;
+			if (ParseTrophyId(condition->value("udsStatId", TrophyJson {}), &stat_id) &&
+			    ParseTrophyNumber(condition->value("targetValue", TrophyJson {}), &target)) {
+				g_trophy_stat_conditions[stat_id].push_back(
+				    {id, target, TrophyJsonString(condition->value("comparator", TrophyJson {}))});
+			}
+		}
 	}
 
 	if (text_entries != metadata_root->end() && text_entries->is_array()) {
@@ -2634,6 +2675,204 @@ static void RecordTrophyUnlock(int trophy_id) {
 			                                     metadata.grade,
 			                                     metadata.icon_png);
 		}
+	}
+}
+
+static std::map<std::string, std::string>
+ReadUcpJsonEntries(const std::filesystem::path& path, const std::vector<std::string_view>& wanted) {
+	std::map<std::string, std::string> entries;
+	Common::File                       file(path, Common::File::Mode::Read);
+	if (file.IsInvalid() || file.Size() < TROPHY_UCP_HEADER_SIZE ||
+	    file.Size() > TROPHY_PACKAGE_MAX_SIZE) {
+		return entries;
+	}
+	const auto data = file.ReadWholeBuffer();
+	if (data.size() < TROPHY_UCP_HEADER_SIZE ||
+	    ReadTrophyU32BE(data.data()) != TROPHY_UCP_MAGIC ||
+	    ReadTrophyU32BE(data.data() + 4) != TROPHY_UCP_VERSION) {
+		return entries;
+	}
+	const uint64_t declared_size = ReadTrophyU64BE(data.data() + 8);
+	const uint32_t file_count    = ReadTrophyU32BE(data.data() + 0x10);
+	const uint64_t toc_offset    = ReadTrophyU32BE(data.data() + 0x14);
+	if (declared_size < TROPHY_UCP_HEADER_SIZE || declared_size > data.size() ||
+	    file_count > 4096) {
+		return entries;
+	}
+	const uint64_t toc_size = TROPHY_UCP_TOC_SKIP + static_cast<uint64_t>(file_count) *
+	                                                   TROPHY_UCP_ENTRY_SIZE;
+	if (toc_offset > declared_size || toc_size > declared_size - toc_offset) {
+		return entries;
+	}
+	for (uint32_t i = 0; i < file_count; i++) {
+		const uint64_t entry_offset =
+		    toc_offset + TROPHY_UCP_TOC_SKIP + static_cast<uint64_t>(i) * TROPHY_UCP_ENTRY_SIZE;
+		const auto* entry = data.data() + entry_offset;
+		const auto  name  = TrophyPackageEntryName(entry, TROPHY_UCP_NAME_SIZE);
+		if (std::find(wanted.begin(), wanted.end(), name) == wanted.end()) {
+			continue;
+		}
+		const uint64_t offset = ReadTrophyU64BE(entry + 0x20);
+		const uint64_t size   = ReadTrophyU64BE(entry + 0x28);
+		if (offset > declared_size || size > declared_size - offset ||
+		    size > TROPHY_JSON_MAX_SIZE) {
+			return {};
+		}
+		entries[name] = std::string(reinterpret_cast<const char*>(data.data() + offset),
+		                            static_cast<size_t>(size));
+	}
+	return entries;
+}
+
+static bool LoadUdsPackage(const std::filesystem::path& path) {
+	const auto entries =
+	    ReadUcpJsonEntries(path, {"stats_definition.json", "stats_extraction.json"});
+	const auto definitions_file = entries.find("stats_definition.json");
+	const auto rules_file       = entries.find("stats_extraction.json");
+	if (definitions_file == entries.end() || rules_file == entries.end()) {
+		return false;
+	}
+	const auto definitions = TrophyJson::parse(definitions_file->second, nullptr, false);
+	const auto rules       = TrophyJson::parse(rules_file->second, nullptr, false);
+	if (definitions.is_discarded() || !definitions.is_object() || rules.is_discarded() ||
+	    !rules.is_object()) {
+		return false;
+	}
+	const auto stat_array = definitions.find("statDefinitionArray");
+	const auto rule_array = rules.find("statsExtractionRuleArray");
+	if (stat_array == definitions.end() || !stat_array->is_array() || rule_array == rules.end() ||
+	    !rule_array->is_array()) {
+		return false;
+	}
+
+	std::unordered_set<int> latest_stats;
+	for (const auto& stat: *stat_array) {
+		int stat_id = 0;
+		if (stat.is_object() && ParseTrophyId(stat.value("statId", TrophyJson {}), &stat_id) &&
+		    TrophyJsonString(stat.value("aggregation", TrophyJson {})) == "latest") {
+			latest_stats.insert(stat_id);
+		}
+	}
+
+	size_t loaded = 0;
+	for (const auto& rule: *rule_array) {
+		if (!rule.is_object()) {
+			continue;
+		}
+		const auto condition = rule.find("condition");
+		const auto action    = rule.find("action");
+		if (condition == rule.end() || !condition->is_object() || action == rule.end() ||
+		    !action->is_object() || condition->contains("property") || action->contains("convert")) {
+			continue;
+		}
+		const auto event_name = TrophyJsonString(condition->value("eventName", TrophyJson {}));
+		const auto input      = TrophyJsonString(action->value("input", TrophyJson {}));
+		const auto output     = action->find("output");
+		int        stat_id    = 0;
+		if (event_name.empty() || !input.starts_with("$.") ||
+		    input.find('.', 2) != std::string::npos || output == action->end() ||
+		    !output->is_object() ||
+		    !ParseTrophyId(output->value("statId", TrophyJson {}), &stat_id) ||
+		    !latest_stats.contains(stat_id)) {
+			continue;
+		}
+		g_uds_event_rules[event_name].push_back({input.substr(2), stat_id});
+		loaded++;
+	}
+	LOGF("[UDS] loaded %zu event rule(s) from %s\n", loaded, Common::PathToString(path).c_str());
+	return loaded != 0;
+}
+
+static void EnsureUdsRulesLoaded() {
+	std::scoped_lock lock(g_trophy_mutex);
+	if (g_uds_rules_loaded || g_uds_rules_scanned) {
+		return;
+	}
+	bool found_directory = false;
+	for (const char* location: {"/app0/sce_sys/trophy2", "/app0/sce_sys"}) {
+		const auto directory = Libs::LibKernel::FileSystem::GetRealFilename(location);
+		if (directory.empty()) {
+			continue;
+		}
+		found_directory = true;
+		std::vector<std::filesystem::path> packages;
+		for (const auto& entry: Common::File::GetDirEntries(directory)) {
+			std::string name = entry.name;
+			std::transform(name.begin(), name.end(), name.begin(),
+			               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+			if (entry.is_file && name.starts_with("uds") && name.ends_with(".ucp")) {
+				packages.push_back(directory / Common::PathFromUtf8(entry.name));
+			}
+		}
+		std::sort(packages.begin(), packages.end());
+		for (const auto& package: packages) {
+			if (LoadUdsPackage(package)) {
+				g_uds_rules_loaded = true;
+			}
+		}
+	}
+	if (!found_directory) {
+		return;
+	}
+	g_uds_rules_scanned = true;
+	if (!g_uds_rules_loaded) {
+		LOGF("[UDS] no usable uds*.ucp found; stat-driven trophies are disabled\n");
+	}
+}
+
+static bool TrophyConditionMet(int64_t value, const TrophyStatCondition& condition) {
+	if (condition.comparator == "ge" || condition.comparator == ">=") {
+		return value >= condition.target;
+	}
+	if (condition.comparator == "gt" || condition.comparator == ">") {
+		return value > condition.target;
+	}
+	if (condition.comparator == "le" || condition.comparator == "<=") {
+		return value <= condition.target;
+	}
+	if (condition.comparator == "lt" || condition.comparator == "<") {
+		return value < condition.target;
+	}
+	if (condition.comparator == "eq" || condition.comparator == "==") {
+		return value == condition.target;
+	}
+	if (condition.comparator == "ne" || condition.comparator == "!=") {
+		return value != condition.target;
+	}
+	return false;
+}
+
+static void HandleUdsEvent(const std::string& event_name,
+                           const std::unordered_map<std::string, int64_t>& properties) {
+	EnsureTrophyMetadataLoaded();
+	EnsureTrophyUnlocksLoaded();
+	EnsureUdsRulesLoaded();
+
+	std::vector<int> to_unlock;
+	{
+		std::scoped_lock lock(g_trophy_mutex);
+		const auto       rules = g_uds_event_rules.find(event_name);
+		if (rules == g_uds_event_rules.end()) {
+			return;
+		}
+		for (const auto& rule: rules->second) {
+			const auto conditions = g_trophy_stat_conditions.find(rule.stat_id);
+			const auto value      = properties.find(rule.input);
+			if (conditions == g_trophy_stat_conditions.end() || value == properties.end()) {
+				continue;
+			}
+			for (const auto& condition: conditions->second) {
+				if (!g_unlocked_trophies.contains(condition.trophy_id) &&
+				    TrophyConditionMet(value->second, condition)) {
+					to_unlock.push_back(condition.trophy_id);
+				}
+			}
+		}
+	}
+	for (const auto trophy_id: to_unlock) {
+		LOGF("[Trophy] UDS event %s satisfied the condition of trophy %d\n", event_name.c_str(),
+		     trophy_id);
+		RecordTrophyUnlock(trophy_id);
 	}
 }
 
@@ -3129,18 +3368,20 @@ static int KYTY_SYSV_ABI NpUniversalDataSystemPostEvent(int context, int handle,
 	     context, handle, uds_event->name.c_str(), reinterpret_cast<uint64_t>(event), options);
 	LOGF("[UDS] posted event: %s\n", uds_event->name.c_str());
 
-	if (uds_event->properties != nullptr) {
+	if (uds_event->name == "_UnlockTrophy" && uds_event->properties != nullptr) {
 		const auto trophy_id = uds_event->properties->integers.find("_trophy_id");
-		if (trophy_id != uds_event->properties->integers.end()) {
-			if (trophy_id->second < 0 ||
-			    trophy_id->second > std::numeric_limits<int32_t>::max()) {
-				LOGF("[Trophy] ignored event with invalid _trophy_id: %" PRId64 "\n",
-				     trophy_id->second);
-				return NP_UNIVERSAL_DATA_SYSTEM_ERROR_INVALID_ARGUMENT;
-			}
-			LOGF("[Trophy] received event trophy ID: %" PRId64 "\n", trophy_id->second);
-			LibNpTrophy2::RecordTrophyUnlock(static_cast<int>(trophy_id->second));
+		if (trophy_id == uds_event->properties->integers.end() || trophy_id->second < 0 ||
+		    trophy_id->second > std::numeric_limits<int32_t>::max()) {
+			LOGF("[Trophy] ignored _UnlockTrophy event without a valid _trophy_id\n");
+			return NP_UNIVERSAL_DATA_SYSTEM_ERROR_INVALID_ARGUMENT;
 		}
+		LOGF("[Trophy] received _UnlockTrophy event: id=%" PRId64 "\n", trophy_id->second);
+		LibNpTrophy2::RecordTrophyUnlock(static_cast<int>(trophy_id->second));
+	} else if (uds_event->name == "_UnlockTrophy") {
+		LOGF("[Trophy] ignored _UnlockTrophy event without properties\n");
+		return NP_UNIVERSAL_DATA_SYSTEM_ERROR_INVALID_ARGUMENT;
+	} else if (uds_event->properties != nullptr) {
+		LibNpTrophy2::HandleUdsEvent(uds_event->name, uds_event->properties->integers);
 	}
 
 	return 0;
