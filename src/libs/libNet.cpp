@@ -2611,6 +2611,14 @@ static void NpTrophy2FillTitle(char* dst, size_t dst_size, const char* src) {
 
 static void RecordTrophyUnlock(int trophy_id) {
 	EnsureTrophyMetadataLoaded();
+	{
+		std::scoped_lock lock(g_trophy_mutex);
+		if (!g_trophy_metadata.contains(trophy_id)) {
+			LOGF("[Trophy] ignored unlock for trophy ID %d because it is absent from the game package\n",
+			     trophy_id);
+			return;
+		}
+	}
 	EnsureTrophyUnlocksLoaded();
 	bool newly_unlocked = false;
 	{
@@ -3121,22 +3129,18 @@ static int KYTY_SYSV_ABI NpUniversalDataSystemPostEvent(int context, int handle,
 	     context, handle, uds_event->name.c_str(), reinterpret_cast<uint64_t>(event), options);
 	LOGF("[UDS] posted event: %s\n", uds_event->name.c_str());
 
-	if (uds_event->name == "_UnlockTrophy" && uds_event->properties != nullptr) {
+	if (uds_event->properties != nullptr) {
 		const auto trophy_id = uds_event->properties->integers.find("_trophy_id");
-		if (trophy_id == uds_event->properties->integers.end() || trophy_id->second < 0 ||
-		    trophy_id->second > std::numeric_limits<int32_t>::max()) {
-			LOGF("[Trophy] ignored _UnlockTrophy event without a valid _trophy_id\n");
-			return NP_UNIVERSAL_DATA_SYSTEM_ERROR_INVALID_ARGUMENT;
+		if (trophy_id != uds_event->properties->integers.end()) {
+			if (trophy_id->second < 0 ||
+			    trophy_id->second > std::numeric_limits<int32_t>::max()) {
+				LOGF("[Trophy] ignored event with invalid _trophy_id: %" PRId64 "\n",
+				     trophy_id->second);
+				return NP_UNIVERSAL_DATA_SYSTEM_ERROR_INVALID_ARGUMENT;
+			}
+			LOGF("[Trophy] received event trophy ID: %" PRId64 "\n", trophy_id->second);
+			LibNpTrophy2::RecordTrophyUnlock(static_cast<int>(trophy_id->second));
 		}
-		LOGF("[Trophy] received _UnlockTrophy event: id=%" PRId64 "\n", trophy_id->second);
-		LibNpTrophy2::RecordTrophyUnlock(static_cast<int>(trophy_id->second));
-	} else if (uds_event->name == "_UnlockTrophy") {
-		LOGF("[Trophy] ignored _UnlockTrophy event without properties\n");
-		return NP_UNIVERSAL_DATA_SYSTEM_ERROR_INVALID_ARGUMENT;
-	} else if (uds_event->name == "COOLING__DIVED_FROM_DIVING_BOARD" ||
-	           uds_event->name == "COOLING_DIVED_FROM_DIVING_BOARD") {
-		LOGF("[Trophy] mapped diving-board event to trophy 30\n");
-		LibNpTrophy2::RecordTrophyUnlock(30);
 	}
 
 	return 0;
