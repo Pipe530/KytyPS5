@@ -68,7 +68,7 @@ void AddOrUpdateEntry(std::map<std::string, AddContentEntry>& by_label, std::str
 	}
 }
 
-void ParseParamJson(const std::filesystem::path& file_name,
+void ParseParamJson(const std::filesystem::path& file_name, const std::string& title_id,
                     std::map<std::string, AddContentEntry>& by_label) {
 	Common::File f;
 	f.Open(file_name, Common::File::Mode::Read);
@@ -101,12 +101,19 @@ void ParseParamJson(const std::filesystem::path& file_name,
 		mount_dir = mount_dir.parent_path();
 	}
 
-	AddOrUpdateEntry(by_label, it->get<std::string>(), mount_dir);
+	const auto& content_id = it->get_ref<const std::string&>();
+	if (!title_id.empty() && content_id.find(title_id) == std::string::npos) {
+		LOGF("AddContent: skipping %s (belongs to another title, current=%s)\n",
+		     content_id.c_str(), title_id.c_str());
+		return;
+	}
+
+	AddOrUpdateEntry(by_label, content_id, mount_dir);
 	LOGF("AddContent: found dumped package: %s (%s)\n",
 	     it->get_ref<const std::string&>().c_str(), Common::PathToString(mount_dir).c_str());
 }
 
-void ScanDirectory(const std::filesystem::path& dir,
+void ScanDirectory(const std::filesystem::path& dir, const std::string& title_id,
                    std::map<std::string, AddContentEntry>& by_label) {
 	std::error_code ec;
 	std::filesystem::recursive_directory_iterator it(
@@ -125,7 +132,7 @@ void ScanDirectory(const std::filesystem::path& dir,
 		const auto  name  = Common::PathToString(path.filename());
 
 		if (Common::EqualNoCase(name, "param.json")) {
-			ParseParamJson(path, by_label);
+			ParseParamJson(path, title_id, by_label);
 		}
 	}
 }
@@ -146,15 +153,10 @@ void AddContentLoad(const std::filesystem::path& dir, const std::string& title_i
 	     title_id.c_str());
 
 	std::map<std::string, AddContentEntry> by_label;
-	ScanDirectory(dir, by_label);
+	ScanDirectory(dir, title_id, by_label);
 
 	reg->entries.reserve(by_label.size());
 	for (auto& [label, entry]: by_label) {
-		if (!title_id.empty() && entry.content_id.find(title_id) == std::string::npos) {
-			LOGF("AddContent: skipping %s (belongs to another title, current=%s)\n",
-			     entry.content_id.c_str(), title_id.c_str());
-			continue;
-		}
 		LOGF("AddContent: registered %s -> label=%s, mount=%s\n", entry.content_id.c_str(),
 		     entry.entitlement_label.c_str(),
 		     entry.mount_dir.empty() ? "(none)" : Common::PathToString(entry.mount_dir).c_str());

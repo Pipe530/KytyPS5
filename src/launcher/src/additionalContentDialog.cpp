@@ -65,7 +65,8 @@ void AddEntry(std::map<QString, DlcEntry>& entries, const QString& content_id,
 	}
 }
 
-void ParseParamJson(const QString& path, std::map<QString, DlcEntry>& entries) {
+void ParseParamJson(const QString& path, const QString& title_id,
+                    std::map<QString, DlcEntry>& entries) {
 	QFile f(path);
 	if (!f.open(QIODevice::ReadOnly)) {
 		return;
@@ -78,6 +79,9 @@ void ParseParamJson(const QString& path, std::map<QString, DlcEntry>& entries) {
 	QDir dir = QFileInfo(path).dir();
 	if (dir.dirName() == QStringLiteral("sce_sys")) {
 		dir.cdUp();
+	}
+	if (!title_id.isEmpty() && !id.contains(title_id, Qt::CaseInsensitive)) {
+		return;
 	}
 	AddEntry(entries, id, dir.absolutePath(), TitleOf(root));
 }
@@ -194,16 +198,13 @@ void AdditionalContentDialog::Scan() {
 			const auto path = it.next();
 			const auto name = QFileInfo(path).fileName();
 			if (name.compare(QStringLiteral("param.json"), Qt::CaseInsensitive) == 0) {
-				ParseParamJson(path, entries);
+				ParseParamJson(path, m_title_id, entries);
 			}
 		}
 	}
 
 	int count = 0;
 	for (const auto& [label, entry]: entries) {
-		if (!m_title_id.isEmpty() && !entry.content_id.contains(m_title_id, Qt::CaseInsensitive)) {
-			continue;
-		}
 
 		QPixmap icon = m_game_icon;
 		if (!entry.package_dir.isEmpty()) {
