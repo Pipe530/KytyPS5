@@ -9,6 +9,7 @@
 #include "libs/errno.h"
 #include "libs/libs.h"
 #include "loader/addContent.h"
+#include "libs/systemService.h"
 #include "loader/symbolDatabase.h"
 #include "loader/systemContent.h"
 
@@ -112,6 +113,7 @@ int KYTY_SYSV_ABI AppContentInitialize(const AppContentInitParam* init_param,
 		LOGF("\t TITLE_ID missing\n");
 	}
 
+	SystemService::NotifyEntitlementUpdate();
 	return OK;
 }
 
