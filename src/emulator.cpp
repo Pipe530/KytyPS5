@@ -21,6 +21,7 @@
 #include "libs/controller.h"
 #include "libs/libs.h"
 #include "libs/network.h"
+#include "loader/addContent.h"
 #include "loader/runtimeLinker.h"
 #include "loader/systemContent.h"
 #include "loader/timer.h"
@@ -213,6 +214,9 @@ void Run(const RunOptions& options) {
 
 	MountSandboxDirs();
 
+	std::string addcont_title_id;
+	Loader::SystemContentParamSfoGetString("TITLE_ID", &addcont_title_id);
+	Loader::AddContentLoad(options.addcont_dir, addcont_title_id);
 	auto* rt = Common::Singleton<Loader::RuntimeLinker>::Instance();
 	Libs::InitAll(rt->Symbols());
 

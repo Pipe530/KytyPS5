@@ -103,6 +103,7 @@ public:
 	QString    firmwareVer; /* requiredSystemSoftwareVersion from sce_sys/param.json */
 	QString    basedir;     /* Game base directory */
 	QString    game_path;   /* Launcher-unique game path */
+	QString    addons_dir;  /* Global add-ons folder (runtime only, not serialized) */
 	bool       custom_settings = false;
 	GameStatus game_status     = GameStatus::Unknown;
 	QString    game_comment;

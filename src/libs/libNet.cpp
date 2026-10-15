@@ -5,6 +5,7 @@
 #include "libs/errno.h"
 #include "libs/libs.h"
 #include "libs/network.h"
+#include "loader/addContent.h"
 #include "loader/symbolDatabase.h"
 
 #include <algorithm>
@@ -1623,12 +1624,6 @@ struct NpEntitlementAccessEntitlementKey {
 	uint8_t data[16];
 };
 
-static constexpr NpEntitlementAccessAddcontEntitlementInfo NP_ENTITLEMENT_ACCESS_ADDON_LIST[] = {
-    {{{"85y-je"}, {}}, 3, 4}, // GTA V hash 0xf4315381
-    {{{"5d5c48"}, {}}, 3, 4}, // GTA V hash 0x961c34b0
-    {{{"_mtqu6"}, {}}, 3, 4}, // GTA V hash 0x9cd1bcad
-};
-
 static int KYTY_SYSV_ABI NpEntitlementAccessInitialize(
     const NpEntitlementAccessInitParam* init_param, NpEntitlementAccessBootParam* boot_param) {
 	PRINT_NAME();
@@ -1667,15 +1662,24 @@ static int KYTY_SYSV_ABI NpEntitlementAccessGetAddcontEntitlementInfoList(
 		return NP_ENTITLEMENT_ACCESS_ERROR_PARAMETER;
 	}
 
-	*hit_num = static_cast<uint32_t>(sizeof(NP_ENTITLEMENT_ACCESS_ADDON_LIST) /
-	                                 sizeof(NP_ENTITLEMENT_ACCESS_ADDON_LIST[0]));
+	std::vector<NpEntitlementAccessAddcontEntitlementInfo> addons;
+	for (const auto& entry: Loader::AddContentGetAll()) {
+		NpEntitlementAccessAddcontEntitlementInfo info {};
+		std::strncpy(info.entitlement_label.data, entry.entitlement_label.c_str(),
+		             sizeof(info.entitlement_label.data) - 1);
+		info.package_type    = 3;
+		info.download_status = 4;
+		addons.push_back(info);
+	}
+
+	*hit_num = static_cast<uint32_t>(addons.size());
 
 	if (list != nullptr && list_num != 0) {
 		memset(list, 0, sizeof(*list) * list_num);
 
 		const auto copy_num = (list_num < *hit_num ? list_num : *hit_num);
 		for (uint32_t i = 0; i < copy_num; i++) {
-			list[i] = NP_ENTITLEMENT_ACCESS_ADDON_LIST[i];
+			list[i] = addons[i];
 		}
 	}
 
@@ -1698,12 +1702,14 @@ static int KYTY_SYSV_ABI NpEntitlementAccessGetAddcontEntitlementInfo(
 
 	memset(info, 0, sizeof(*info));
 
-	for (const auto& entitlement: NP_ENTITLEMENT_ACCESS_ADDON_LIST) {
-		if (strncmp(entitlement_label->data, entitlement.entitlement_label.data,
-		            sizeof(entitlement_label->data)) == 0) {
-			*info = entitlement;
-			return 0;
-		}
+	if (const auto* entry = Loader::AddContentFind(entitlement_label->data,
+	                                               sizeof(entitlement_label->data));
+	    entry != nullptr) {
+		std::strncpy(info->entitlement_label.data, entry->entitlement_label.c_str(),
+		             sizeof(info->entitlement_label.data) - 1);
+		info->package_type    = 3;
+		info->download_status = 4;
+		return 0;
 	}
 
 	return NP_ENTITLEMENT_ACCESS_ERROR_NO_ENTITLEMENT;

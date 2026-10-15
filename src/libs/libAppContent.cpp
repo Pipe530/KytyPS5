@@ -2,16 +2,23 @@
 #include "common/assert.h"
 #include "common/common.h"
 #include "common/emulatorConfig.h"
+#include "common/file.h"
 #include "common/logging/log.h"
 #include "common/stringUtils.h"
+#include "kernel/fileSystem.h"
 #include "libs/errno.h"
 #include "libs/libs.h"
+#include "loader/addContent.h"
 #include "loader/symbolDatabase.h"
 #include "loader/systemContent.h"
 
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
+#include <mutex>
+#include <string>
 #include <system_error>
+#include <vector>
 
 namespace Libs {
 
@@ -23,6 +30,15 @@ constexpr uint32_t APP_CONTENT_APPPARAM_SKU_FLAG_FULL   = 3;
 constexpr int      APP_CONTENT_ERROR_PARAMETER          = -2133262334; /* 0x80D90002 */
 constexpr int      APP_CONTENT_ERROR_NOT_MOUNTED        = -2133262332; /* 0x80D90004 */
 constexpr int      APP_CONTENT_ERROR_DRM_NO_ENTITLEMENT = -2133262329; /* 0x80D90007 */
+constexpr int      APP_CONTENT_ERROR_NOT_FOUND          = static_cast<int>(0x80540001);
+
+struct AddcontMount {
+	std::string label;
+	std::string point;
+};
+
+static std::mutex                g_addcont_mutex;
+static std::vector<AddcontMount> g_addcont_mounts;
 
 static std::string g_title_id;
 
@@ -178,7 +194,44 @@ int KYTY_SYSV_ABI AppContentAddcontMount(uint32_t                         servic
 
 	std::memset(mount_point->data, 0, sizeof(mount_point->data));
 
-	return APP_CONTENT_ERROR_DRM_NO_ENTITLEMENT;
+	const auto* entry = Loader::AddContentFind(entitlement_label->data,
+	                                           sizeof(entitlement_label->data));
+	if (entry == nullptr) {
+		return APP_CONTENT_ERROR_NOT_FOUND;
+	}
+
+	std::lock_guard lock(g_addcont_mutex);
+
+	for (const auto& m: g_addcont_mounts) {
+		if (m.label == entry->entitlement_label) {
+			std::strncpy(mount_point->data, m.point.c_str(), sizeof(mount_point->data) - 1);
+			return OK;
+		}
+	}
+
+	auto dir = entry->mount_dir;
+	if (dir.empty()) {
+		// Unlock-only entitlement: the data already ships with the game update.
+		dir = std::filesystem::path("_AddContData") /
+		      (g_title_id.empty() ? std::string("UNKNOWN") : g_title_id) /
+		      entry->entitlement_label;
+		Common::File::CreateDirectories(dir);
+	}
+
+	uint32_t index = 0;
+	while (std::any_of(g_addcont_mounts.begin(), g_addcont_mounts.end(),
+	                   [&](const AddcontMount& m) { return m.point == "/addcont" + std::to_string(index); })) {
+		index++;
+	}
+
+	AddcontMount mount {entry->entitlement_label, "/addcont" + std::to_string(index)};
+	LibKernel::FileSystem::Mount(dir, mount.point);
+	LOGF("\t mounted %s -> %s\n", mount.point.c_str(), Common::PathToString(dir).c_str());
+
+	std::strncpy(mount_point->data, mount.point.c_str(), sizeof(mount_point->data) - 1);
+	g_addcont_mounts.push_back(std::move(mount));
+
+	return OK;
 }
 
 int KYTY_SYSV_ABI AppContentAddcontUnmount(const AppContentMountPoint* mount_point) {
@@ -192,6 +245,17 @@ int KYTY_SYSV_ABI AppContentAddcontUnmount(const AppContentMountPoint* mount_poi
 
 	if (mount_point->data[0] == '\0') {
 		return APP_CONTENT_ERROR_NOT_MOUNTED;
+	}
+
+	const std::string point(mount_point->data, strnlen(mount_point->data, sizeof(mount_point->data)));
+
+	std::lock_guard lock(g_addcont_mutex);
+
+	const auto it = std::find_if(g_addcont_mounts.begin(), g_addcont_mounts.end(),
+	                             [&](const AddcontMount& m) { return m.point == point; });
+	if (it != g_addcont_mounts.end()) {
+		LibKernel::FileSystem::Umount(point);
+		g_addcont_mounts.erase(it);
 	}
 
 	return OK;
