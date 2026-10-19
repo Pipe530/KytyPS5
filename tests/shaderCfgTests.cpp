@@ -45,6 +45,7 @@
 #include <span>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -10804,9 +10805,14 @@ void TestMemoryFedScalarLeafCall() {
   };
   IR::SrtRuntime runtime{.read_memory = read, .userdata = &memory, .read_specialization_memory = read};
   const auto options = MakeCompileOptions(ShaderType::Compute);
+  const uint32_t gpu_callable[] = {EncodeVop1(0x02, 4, 256),
+      EncodeSmem0(0x09, 14, 0), 4u << 25u, EncodeSop1(0x21, 14, 14), EncodeSopp(0x01)};
+  const auto skipped = PrepareShaderSource(gpu_callable, options);
+  Check(skipped.unsupported_call_pc == 12u && skipped.calls.empty(),
+        "GPU-buffer callable did not report its unsupported call site");
   auto source = PrepareShaderSource(shader, options);
-  Check(source.call && source.decoded.has_swap_pc &&
-            source.decoded.instructions[source.call->instruction].branch_target == UINT32_MAX,
+  Check(source.calls.size() == 1 && source.decoded.has_swap_pc &&
+            source.decoded.instructions[source.calls.front().instruction].branch_target == UINT32_MAX,
         "memory-fed SWAPPC did not retain an unresolved target");
 #if KYTY_PLATFORM != KYTY_PLATFORM_WINDOWS
   ExpectFatal([&] { (void)TranslateProgram(source.decoded, options); },
@@ -10814,7 +10820,7 @@ void TestMemoryFedScalarLeafCall() {
 #endif
   const auto& linked = RefreshShaderSource(source, runtime);
   Check(linked.has_swap_pc && source.revision == 1 && linked.instructions.back().branch_target == 0x40 &&
-            linked.instructions[source.call->instruction].branch_target == 0x44 &&
+            linked.instructions[source.calls.front().instruction].branch_target == 0x44 &&
             source.reads.back() == std::pair<uint64_t, uint64_t>{base + 0x100, 12},
         "aliased call target, exact leaf range, or continuation was lost");
   const auto* storage = linked.instructions.data();
@@ -10899,14 +10905,14 @@ void TestMemoryFedScalarLeafCall() {
   memory.words[96] = EncodeSMovB32(14, 129);
   ExpectFatal([&] { (void)RefreshShaderSource(source, runtime); },
               "leaf clobbering its return pair was linked");
-  // AND_B64 writes the high half despite the decoder's generic scalar width.
+  // AND_B64 must replace the preceding high-half definition.
   const uint32_t high_writer[] = {
       EncodeSMovB32(15, 129), EncodeSop2(0x0f, 14, 128, 128),
       EncodeSop1(0x21, 14, 14), EncodeSopp(0x01)};
   auto pair_source = PrepareShaderSource(high_writer, options);
   IR::SrtWalker pair_walker(pair_source.call_targets, runtime);
   uint32_t high = 1;
-  Check(pair_walker.Evaluate(pair_source.call->target[1], high) && high == 0,
+  Check(pair_walker.Evaluate(pair_source.calls.front().target[1], high) && high == 0,
         "scalar pair producer used a stale preceding high-half definition");
   const uint32_t joined[] = {
       EncodeSopp(0x04, 2), EncodeSMovB32(14, 129), EncodeSopp(0x02, 1),
@@ -10915,7 +10921,7 @@ void TestMemoryFedScalarLeafCall() {
               "ambiguous reaching definitions were accepted for a call target");
   const uint32_t multiple[] = {EncodeSop1(0x21, 14, 14), EncodeSop1(0x21, 14, 14), EncodeSopp(0x01)};
   ExpectFatal([&] { (void)PrepareShaderSource(multiple, options); },
-              "call metadata bypassed the multiple-call rejection");
+              "a native return pair was accepted as a later call target");
 #endif
 }
 
@@ -10962,7 +10968,7 @@ void TestFusedShaderHandoffPreservesRegisters() {
   for (const auto handoff: {EncodeSop1(0x20, 0, 6), 0xbefd2106u}) {
     front[2] = handoff; // SETPC or captured SWAPPC with NULL destination
     auto source = PrepareShaderSource(front, options);
-    Check(!source.decoded.has_swap_pc && !source.call,
+    Check(!source.decoded.has_swap_pc && source.calls.empty(),
           "fused SETPC handoff entered scalar call preparation");
     auto translated = TranslateProgram(source.decoded, options);
     uint32_t allocations = 0;
@@ -12962,6 +12968,54 @@ void TestLateConstantPropagation() {
   ConstantPropagationPass({&cycle});
   Check(phi.GetOpcode() == ValueOpcode::Phi && phi.Arg(0).TryInstruction() == &phi,
         "an ungrounded Phi cycle acquired a constant");
+}
+
+void TestRepeatedBitcastPropagation() {
+  using namespace ShaderRecompiler::IR;
+  Block entry, left, right;
+  IREmitter e(&entry), l(&left), r(&right);
+  const auto raw = e.GetUserData(static_cast<ScalarReg>(0));
+  const auto other = e.GetUserData(static_cast<ScalarReg>(1));
+  const auto fp = e.Emit(ValueOpcode::ConvertF32U32, {raw});
+  for (const auto [opcode, source, distinct] : {
+       std::tuple{ValueOpcode::BitCastF32U32, Value(raw), Value(other)},
+       std::tuple{ValueOpcode::BitCastU32F32, fp,
+                  e.Emit(ValueOpcode::ConvertF32U32, {other})}}) {
+    const auto first = e.Emit(opcode, {source});
+    const auto duplicate = e.Emit(opcode, {source});
+    const auto separate = e.Emit(opcode, {distinct});
+    const auto left_cast = l.Emit(opcode, {source});
+    const auto left_duplicate = l.Emit(opcode, {source});
+    const auto right_cast = r.Emit(opcode, {source});
+    const auto use = opcode == ValueOpcode::BitCastF32U32
+        ? e.Emit(ValueOpcode::FPIsNan32, {duplicate})
+        : e.Emit(ValueOpcode::IEqual32, {duplicate, Value(0u)});
+    ConstantPropagationPass({&entry, &left, &right});
+    Check(duplicate.Resolve() == first && left_duplicate.Resolve() == left_cast &&
+              use.Instruction()->Arg(0).Resolve() == first,
+          "repeated same-block casts were not shared with their earlier definition");
+    Check(separate.Resolve() == separate && left_cast.Resolve() == left_cast &&
+              right_cast.Resolve() == right_cast && left_cast != first && right_cast != left_cast,
+          "cast reuse merged distinct values or crossed block boundaries");
+  }
+  const auto as_float = e.Emit(ValueOpcode::BitCastF32U32, {raw});
+  const auto raw_roundtrip = e.Emit(ValueOpcode::BitCastU32F32, {as_float});
+  const auto as_bits = e.Emit(ValueOpcode::BitCastU32F32, {fp});
+  const auto float_roundtrip = e.Emit(ValueOpcode::BitCastF32U32, {as_bits});
+  ConstantPropagationPass({&entry});
+  Check(raw_roundtrip.Resolve() == raw && float_roundtrip.Resolve() == fp,
+        "sharing casts prevented inverse casts from folding");
+  for (const uint32_t bits : {0u, 0x80000000u, 1u, 0x80000001u, 0x7f800000u,
+                             0xff800000u, 0x7fc12345u, 0x7f812345u}) {
+    const auto constant_float = e.Emit(ValueOpcode::BitCastF32U32, {Value(bits)});
+    const auto constant_bits = e.Emit(ValueOpcode::BitCastU32F32,
+                                      {Value::F32(std::bit_cast<float>(bits))});
+    ConstantPropagationPass({&entry});
+    Check(constant_float.Resolve().IsImmediate() &&
+              std::bit_cast<uint32_t>(constant_float.Resolve().F32Value()) == bits &&
+              constant_bits.Resolve() == Value(bits),
+          "constant bitcast folding changed signed zero, subnormal, infinity or NaN bits");
+  }
 }
 
 void TestMaskedShiftConstantPropagation() {
@@ -15353,6 +15407,58 @@ void TestScalarMemoryLoadCrossesIntoVcc() {
   }
 }
 
+void TestEmptyBranchScalarReadDce() {
+  using namespace ShaderRecompiler::IR;
+  using ShaderRecompiler::CFG::TerminatorKind;
+  for (const bool reverse : {false, true}) {
+    for (uint32_t mode = 0; mode < 4; ++mode) {
+      Block entry, detour, merge;
+      const BlockList blocks{&entry, &detour, &merge};
+      entry.AddBranch(&detour);
+      entry.AddBranch(&merge);
+      detour.AddBranch(&merge);
+      entry.terminator.kind = TerminatorKind::ConditionalBranch;
+      entry.terminator.true_block = reverse ? &merge : &detour;
+      entry.terminator.false_block = reverse ? &detour : &merge;
+      entry.terminator.merge_block = &merge;
+      detour.terminator.kind = TerminatorKind::Branch;
+      detour.terminator.true_block = &merge;
+      IREmitter ir(&entry);
+      const auto address = ir.Emit(ValueOpcode::GetAddressResource,
+                                   {Value(0x1000u), Value(0u)});
+      const auto read = ir.Emit(ValueOpcode::LoadAddressU32,
+                                {address, Value(24u), Value(0u), Value(true)});
+      const auto predicate = ir.INotEqual(U32(read), U32(Value(0u)));
+      entry.condition = ir.Emit(ValueOpcode::ConditionRef, {predicate});
+      ir.Emit(ValueOpcode::Reference, {entry.condition});
+      ir.Emit(ValueOpcode::Barrier);
+      detour.AppendNewInst(ValueOpcode::ControlNop, {});
+      if (mode == 1) detour.AppendNewInst(ValueOpcode::Barrier, {});
+      if (mode == 2) {
+        auto& phi = merge.AppendNewInst(ValueOpcode::Phi, {});
+        phi.SetFlags(Type::U32);
+        phi.AddPhiOperand(&entry, Value(1u));
+        phi.AddPhiOperand(&detour, Value(2u));
+        merge.AppendNewInst(ValueOpcode::ReferenceU32, {Value(&phi)});
+      }
+      if (mode == 3) merge.AppendNewInst(ValueOpcode::ReferenceU32, {read});
+      EliminateDeadCode(blocks);
+      Check(entry.condition.IsImmediate() == (mode == 0 || mode == 3),
+            "empty branch cleanup changed side effects or a live Phi");
+      const auto contains = [&](ValueOpcode op) {
+        return std::ranges::any_of(entry, [=](const Inst& inst) {
+          return inst.GetOpcode() == op;
+        });
+      };
+      Check(contains(ValueOpcode::LoadAddressU32) == (mode != 0),
+            "empty branch cleanup lost a shared read or retained a dead read");
+      Check(contains(ValueOpcode::Barrier) && entry.ImmSuccessors().size() == 2 &&
+                merge.ImmPredecessors().size() == 2,
+            "empty branch cleanup changed earlier side effects or CFG edges");
+    }
+  }
+}
+
 void TestScalarMemoryUnusedTailDce() {
   const uint32_t shader[] = {
       EncodeSmem0(0x0c, 16, 0),
@@ -16670,6 +16776,7 @@ int main() {
   TestValuePhiValidation();
   TestLaneMaskProjection();
   TestLateConstantPropagation();
+  TestRepeatedBitcastPropagation();
   TestMaskedShiftConstantPropagation();
   TestU64ShiftConstantPropagation();
   TestU64RegisterPairRoundTrip();
@@ -16701,6 +16808,7 @@ int main() {
   TestSrtWalkerRealSBufferTranslation();
   TestScalarMemorySourcesCapturedBeforeWrites();
   TestScalarMemoryLoadCrossesIntoVcc();
+  TestEmptyBranchScalarReadDce();
   TestScalarMemoryUnusedTailDce();
   TestResourceTrackingRealDensePatching();
   TestDirectTranslationResetsAnalysisState();
