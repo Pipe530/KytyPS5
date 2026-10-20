@@ -992,6 +992,14 @@ void ConstantPropagationPass(const BlockList& blocks, uint32_t wave_size) {
 	drain();
 	// Normalize retained PHI/select values only after every supported field read has
 	// been lowered; direct raw consumers remain unsupported.
+	for (auto* block: blocks) {
+		for (auto& inst: *block) {
+			if (inst.GetOpcode() == ValueOpcode::GetBuiltin &&
+			    inst.Arg(0) == Value(static_cast<uint32_t>(StageInputKind::PackedAncillary))) {
+				worklist.lowered_ancillary.insert(&inst);
+			}
+		}
+	}
 	bool normalized;
 	do {
 		normalized = false;
@@ -1003,7 +1011,9 @@ void ConstantPropagationPass(const BlockList& blocks, uint32_t wave_size) {
 					return true;
 				}
 				return user.GetOpcode() == ValueOpcode::Phi ||
-				       (user.GetOpcode() == ValueOpcode::SelectU32 && use.operand == 2u);
+				       (user.GetOpcode() == ValueOpcode::SelectU32 && use.operand == 2u) ||
+				       // DPP "old" value only reaches lanes the update does not write.
+				       (user.GetOpcode() == ValueOpcode::DppUpdateU32 && use.operand == 1u);
 			});
 			if (retained_only) {
 				worklist.QueueUsers(source->Uses());
