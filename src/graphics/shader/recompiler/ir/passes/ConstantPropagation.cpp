@@ -992,52 +992,42 @@ void ConstantPropagationPass(const BlockList& blocks, uint32_t wave_size) {
 	drain();
 	// Normalize retained PHI/select values only after every supported field read has
 	// been lowered; direct raw consumers remain unsupported.
-	// Raw ancillary reads whose only consumers are DPP updates that write every active lane:
-	// the old operand then reaches only EXEC-disabled lanes, so it is unobservable.
-	std::vector<Inst*> dpp_old_only;
+	// A DPP update's old operand only reaches lanes the update does not write. When every
+	// EXEC-active lane is written, that value is unobservable.
+	const auto discardable_dpp_old = [](const Use& use) {
+		const auto& user = *use.user;
+		if (user.GetOpcode() != ValueOpcode::DppUpdateU32 || use.operand != 1u) return false;
+		const auto flags = user.Flags<DppMoveFlags>();
+		// Quad-perm (control < 0x100) always has an in-range source lane.
+		const bool target_valid = flags.bound_control || (!flags.dpp8 && flags.control < 0x100u);
+		return flags.row_mask == 0xfu && flags.bank_mask == 0xfu && target_valid;
+	};
+	std::vector<Inst*> ancillary_sources;
 	for (auto* block: blocks) {
 		for (auto& inst: *block) {
 			if (inst.GetOpcode() == ValueOpcode::GetBuiltin &&
-			    inst.Arg(0) == Value(static_cast<uint32_t>(StageInputKind::PackedAncillary)) &&
-			    !worklist.lowered_ancillary.contains(&inst)) {
-				dpp_old_only.push_back(&inst);
+			    inst.Arg(0) == Value(static_cast<uint32_t>(StageInputKind::PackedAncillary))) {
+				ancillary_sources.push_back(&inst);
 			}
 		}
 	}
 	bool normalized;
 	do {
 		normalized = false;
-		for (auto* source: dpp_old_only) {
+		for (auto* source: ancillary_sources) {
 			if (source->GetOpcode() == ValueOpcode::Identity) continue;
-			const bool discardable = std::ranges::all_of(source->Uses(), [](const Use& use) {
-				const auto& user = *use.user;
-				if (!user.HasUses() && !user.MayHaveSideEffects()) {
-					return true;
-				}
-				if (user.GetOpcode() != ValueOpcode::DppUpdateU32 || use.operand != 1u) {
-					return false;
-				}
-				const auto flags = user.Flags<DppMoveFlags>();
-				// Quad-perm (control < 0x100) always has an in-range source lane.
-				const bool target_valid = flags.bound_control || (!flags.dpp8 && flags.control < 0x100u);
-				return flags.row_mask == 0xfu && flags.bank_mask == 0xfu && target_valid;
-			});
-			if (discardable) {
-				worklist.QueueUsers(source->Uses());
-				Replace(*source, Value(0u));
-				normalized = true;
-			}
-		}
-		for (auto* source: worklist.lowered_ancillary) {
-			if (source->GetOpcode() == ValueOpcode::Identity) continue;
-			const bool retained_only = std::ranges::all_of(source->Uses(), [](const Use& use) {
-				const auto& user = *use.user;
-				if (!user.HasUses() && !user.MayHaveSideEffects()) {
-					return true;
-				}
-				return user.GetOpcode() == ValueOpcode::Phi ||
-				       (user.GetOpcode() == ValueOpcode::SelectU32 && use.operand == 2u);
-			});
+			const bool lowered = worklist.lowered_ancillary.contains(source);
+			const bool retained_only =
+			    std::ranges::all_of(source->Uses(), [&](const Use& use) {
+				    const auto& user = *use.user;
+				    if (!user.HasUses() && !user.MayHaveSideEffects()) {
+					    return true;
+				    }
+				    if (discardable_dpp_old(use)) return true;
+				    return lowered && (user.GetOpcode() == ValueOpcode::Phi ||
+				                       (user.GetOpcode() == ValueOpcode::SelectU32 &&
+				                        use.operand == 2u));
+			    });
 			if (retained_only) {
 				worklist.QueueUsers(source->Uses());
 				Replace(*source, Value(0u));
