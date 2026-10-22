@@ -99,6 +99,7 @@ ShaderRecompiler::CompileOptions MakeCompileOptions(ShaderType stage) {
   ShaderRecompiler::CompileOptions options;
   options.stage = stage;
   options.user_data = user_data;
+  options.emit_debug_info = true; // Checks find variables and functions by OpName.
   switch (stage) {
   case ShaderType::Vertex:
     options.input_info.vertex = &vertex;
@@ -402,6 +403,11 @@ SpirvMetrics MeasureSpirv(const std::vector<uint32_t> &binary) {
     const uint32_t word_count = word >> 16u;
     if (word_count == 0 || i + word_count > binary.size()) {
       break;
+    }
+    if (opcode == spv::OpName || opcode == spv::OpString || opcode == spv::OpLine) {
+      metrics.words -= word_count; // Budgets measure the module without debug info.
+      i += word_count;
+      continue;
     }
     metrics.instructions++;
     switch (opcode) {
@@ -10354,7 +10360,7 @@ void TestNewShaderRecompilerPlanningOnlyLoads() {
   ir.Emit(IR::ValueOpcode::ReferenceU32, {read});
   program.shader_info_complete = false;
   IR::CollectShaderInfo(program, options.input_info);
-  const auto spirv = Spirv::EmitProgram(program, options.input_info);
+  const auto spirv = Spirv::EmitProgram(program, options.input_info, 0, {}, true);
   CheckSpirvBinaryValidates(spirv);
   Check(spirv == result.spirv,
         "planning-only loads or references emitted GPU operands/instructions");
@@ -11100,6 +11106,7 @@ void TestMeshExportStorage() {
   options.stage = ShaderType::Mesh;
   options.input_info.vertex = &input;
   options.user_data = user_data;
+  options.emit_debug_info = true; // The checks find push data by its OpName.
   struct Case {
     uint32_t subgroup_size, push_data_start;
     bool split;
@@ -14352,7 +14359,8 @@ void TestNewShaderRecompilerNativeBindingPlan() {
   const auto bindings = result.program.bindings;
   result.program.bindings = {};
   result.program.info.buffers[0].descriptor_index = UINT32_MAX;
-  Check(ShaderRecompiler::Spirv::EmitProgram(result.program, options.input_info) == result.spirv &&
+  Check(ShaderRecompiler::Spirv::EmitProgram(result.program, options.input_info, 0, {}, true) ==
+                result.spirv &&
             result.program.bindings == bindings &&
             result.program.info.buffers[0].descriptor_index == 0,
         "repeated emission did not rebuild descriptor slots deterministically");
@@ -16423,11 +16431,15 @@ void TestRepeatedExportsHaveOneInterface() {
 void CheckSpirvBlockSourceMapping(TestCompileResult &result) {
   using namespace ShaderRecompiler;
   const auto options = MakeCompileOptions(ShaderType::Compute);
-  Check(SpirvInstructionOpcodeCount(result.spirv, spv::OpString) == 0 &&
-            SpirvInstructionOpcodeCount(result.spirv, spv::OpLine) == 0,
-        "default emission unexpectedly contains source mapping");
+  const auto plain = Spirv::EmitProgram(result.program, options.input_info);
+  Check(SpirvInstructionOpcodeCount(plain, spv::OpString) == 0 &&
+            SpirvInstructionOpcodeCount(plain, spv::OpLine) == 0 &&
+            SpirvInstructionOpcodeCount(plain, spv::OpName) == 0,
+        "default emission unexpectedly contains debug info");
   const auto mapped =
       Spirv::EmitProgram(result.program, options.input_info, 0, {}, true);
+  Check(SpirvInstructionOpcodeCount(mapped, spv::OpName) != 0,
+        "debug emission omitted names");
   CheckSpirvBinaryValidates(mapped);
   uint32_t source = 0;
   uint32_t label = 0;
@@ -16456,7 +16468,7 @@ void CheckSpirvBlockSourceMapping(TestCompileResult &result) {
   }
   Check(source != 0 && lines >= result.program.blocks.size(),
         "debug emission omitted native block source mapping");
-  Check(Spirv::EmitProgram(result.program, options.input_info) == result.spirv,
+  Check(Spirv::EmitProgram(result.program, options.input_info) == plain,
         "debug re-emission changed the default binary");
 }
 

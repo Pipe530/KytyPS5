@@ -90,7 +90,8 @@ ImageCreateFlags(const GraphicContext& graphics, const ImageInfo& info, vk::Imag
 	if (HasFormatFeature(properties, vk::FormatFeatureFlagBits::eColorAttachment)) {
 		usage |= vk::ImageUsageFlagBits::eColorAttachment;
 	}
-	if (info.samples == 1) {
+	if (graphics.GetPhysicalDeviceProperties().limits.storageImageSampleCounts &
+	    static_cast<vk::SampleCountFlagBits>(info.samples)) {
 		usage |= vk::ImageUsageFlagBits::eStorage;
 	}
 	return usage;
