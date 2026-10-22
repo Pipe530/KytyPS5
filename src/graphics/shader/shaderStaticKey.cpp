@@ -103,6 +103,10 @@ void BuildStageStaticKey(const ShaderPixelInputInfo& info, std::vector<uint32_t>
 	}
 	key.insert(key.end(), std::begin(info.interpolator_settings),
 	           std::begin(info.interpolator_settings) + info.input_num);
+	// Render scale: the FragCoord multiplier baked into the shader (only when scaled, keeps older keys).
+	if (info.ps_frag_coord_scale != 1.0f) {
+		key.push_back(std::bit_cast<uint32_t>(info.ps_frag_coord_scale));
+	}
 }
 
 void BuildStageStaticKey(const ShaderComputeInputInfo& info, std::vector<uint32_t>& key) {

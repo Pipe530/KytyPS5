@@ -1,6 +1,7 @@
 #include "graphics/shader/recompiler/ir/passes/BindingLayout.h"
 
 #include "common/assert.h"
+#include "common/emulatorConfig.h"
 #include "graphics/shader/recompiler/CodegenOptions.h"
 #include "graphics/shader/recompiler/ir/ShaderIR.h"
 
@@ -90,6 +91,23 @@ bool UsesMipStats(const Program& program) {
 	return false;
 }
 
+bool UsesImageFetch(const Program& program) {
+	if (program.info.images.empty() || !Config::RenderScaleActive()) {
+		return false;
+	}
+	for (const auto* block: program.blocks) {
+		for (const auto& inst: *block) {
+			switch (inst.GetOpcode()) {
+				case ValueOpcode::ImageRead:
+				case ValueOpcode::ImageWrite:
+				case ValueOpcode::ImageQueryDimensions: return true;
+				default: break;
+			}
+		}
+	}
+	return false;
+}
+
 void AllocateBindings(Program& program, uint32_t push_data_start_dword) {
 	if (!program.shader_info_complete || program.binding_layout_complete) {
 		EXIT("shader binding layout failed: %s", !program.shader_info_complete
@@ -102,6 +120,7 @@ void AllocateBindings(Program& program, uint32_t push_data_start_dword) {
 	next.memory_offset_count = static_cast<uint32_t>(program.info.buffers.size());
 	const bool mip_stats     = UsesMipStats(program);
 	next.mip_stats_count     = mip_stats ? static_cast<uint32_t>(program.info.images.size()) : 0u;
+	next.render_scale_count  = UsesImageFetch(program) ? static_cast<uint32_t>(program.info.images.size()) : 0u;
 	next.push_data_start_dword =
 	    PushData::StartFor(push_data_start_dword, next.ShaderDataDwords());
 

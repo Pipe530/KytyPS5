@@ -1517,6 +1517,9 @@ void TextureCache::RefreshCopySource(ImageId id) {
 }
 
 bool TextureCache::CopyD16(Image& destination, Image& source) {
+	if (source.IsScaled() || destination.IsScaled()) {
+		return true;
+	}
 	const bool source_depth      = source.info.IsDepth();
 	const bool destination_depth = destination.info.IsDepth();
 	if (source_depth == destination_depth) {
@@ -1656,6 +1659,17 @@ bool TextureCache::CopyImage(ImageId destination_id, ImageId source_id, const ch
 	// Lossless paths copy raw texel bits; the D16 path converts through unorm16.
 	bool        lossless = true;
 	const char* path     = nullptr;
+	if (source.IsScaled() || destination.IsScaled()) {
+		static int logged = 0;
+		if (logged++ < 12) {
+			LOGF("RenderScale: copy src info=%ux%u backing=%ux%u -> dst info=%ux%u backing=%ux%u "
+			     "direct=%d\n",
+			     source.info.extent.width, source.info.extent.height, source.backing.extent.width,
+			     source.backing.extent.height, destination.info.extent.width,
+			     destination.info.extent.height, destination.backing.extent.width,
+			     destination.backing.extent.height, direct_copy ? 1 : 0);
+		}
+	}
 	if (direct_copy) {
 		destination.CopyImage(source);
 		Profiler::CountFrameEvent(Profiler::FrameEvent::ImageCopyDirect);
@@ -2113,6 +2127,9 @@ TextureCache::ImageDownload TextureCache::BuildDownload(const Image& image) cons
 
 void TextureCache::UploadImage(Image& image, Buffer& source, uint64_t source_offset) {
 	auto& destination = image.depth_id ? m_slot_images[image.depth_id] : image;
+	if (destination.IsScaled()) {
+		return;
+	}
 	const auto binding = image.depth_id ? BindingType::DepthTarget : UploadBinding(image);
 	const auto  upload  = [&](std::vector<vk::BufferImageCopy>& copies, TileManager::Result linear) {
 		for (auto& copy: copies) {
@@ -3599,6 +3616,12 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_format, RepeatLookup
 			} else if (resolved.info.resources < desc.info.resources) {
 				FreeImage(result, HangTrace::ImageFreeReason::SmallerResources);
 				result = {};
+			} else if ((desc.type == BindingType::RenderTarget ||
+			            desc.type == BindingType::DepthTarget) &&
+			           desc.info.render_scaled != resolved.IsScaled()) {
+				// A target must have the same scale as the viewport math assumes.
+				FreeImage(result);
+				result = {};
 			}
 		}
 		if (!result) {
@@ -4320,9 +4343,9 @@ void TextureCache::ClearImage(CommandBuffer& command, ImageId id, vk::Format for
 		attachment.storeOp     = vk::AttachmentStoreOp::eStore;
 		attachment.clearValue  = clear;
 		vk::RenderingInfo rendering {};
-		rendering.renderArea.extent = {
-		    std::max(image.info.extent.width >> range.baseMipLevel, 1u),
-		    std::max(image.info.extent.height >> range.baseMipLevel, 1u)};
+		const auto area_extent = image.IsScaled() ? image.backing.extent : image.info.extent;
+		rendering.renderArea.extent = {std::max(area_extent.width >> range.baseMipLevel, 1u),
+		                               std::max(area_extent.height >> range.baseMipLevel, 1u)};
 		rendering.layerCount           = range.layerCount;
 		rendering.colorAttachmentCount = 1;
 		rendering.pColorAttachments    = &attachment;

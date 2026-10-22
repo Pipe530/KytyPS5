@@ -4081,12 +4081,35 @@ void ApplyClipSpace(const GraphicContext& graphics, const HW::Context& context,
 
 } // namespace
 
+// Mirrors ImageInfo::RenderScaleEligible for the first bound color target.
+static void ApplyFragCoordScale(const HW::Context& context, ShaderPixelInputInfo& pixel_info,
+                                bool allow) {
+	if (!allow || !Config::RenderScaleActive()) {
+		return;
+	}
+	for (uint32_t slot = 0; slot < 8u; slot++) {
+		const auto& rt = context.GetRenderTarget(slot);
+		if (rt.base.addr == 0 ||
+		    render_target_mask_slot(context.GetRenderTargetMask(), slot) == 0u) {
+			continue;
+		}
+		const uint64_t w = rt.attrib2.width + 1u;
+		const uint64_t h = rt.attrib2.height + 1u;
+		const bool big_enough = w >= 2560 && h >= 1440;
+		const float scale     = Config::GetRenderScaleFor(static_cast<uint32_t>(h));
+		if (big_enough && w * 10 >= h * 16 && scale < 1.0f) {
+			pixel_info.ps_frag_coord_scale = 1.0f / scale;
+		}
+		break;
+	}
+}
+
 PipelineCache::GraphicsPrograms PipelineCache::GetGraphicsPrograms(
     const HW::VertexShaderInfo& vertex_regs, const HW::PixelShaderInfo& pixel_regs,
     const HW::ShaderRegisters& sh, const HW::Context& context, const HW::UserConfig& user_config,
     std::span<const Prospero::ColorComponentMapping, 8> target_export_mapping, bool pixel_active,
     std::array<ShaderVertexInputInfo, 3>& vertex_info, ShaderPixelInputInfo& pixel_info,
-    GraphicsStagePreps& stage_preps) {
+    GraphicsStagePreps& stage_preps, bool allow_frag_coord_scale) {
 	KYTY_PROFILER_DETAIL_FUNCTION();
 	const bool tess_active = TessellationActive(user_config);
 	std::array<ShaderParams, 3> vertex_params;
@@ -4108,6 +4131,7 @@ PipelineCache::GraphicsPrograms PipelineCache::GetGraphicsPrograms(
 	if (pixel_active) {
 		pixel_params = PrepareProgram(pixel_regs, sh, target_export_mapping, pixel_info);
 		ApplyDualSourceBlending(context, pixel_info);
+		ApplyFragCoordScale(context, pixel_info, allow_frag_coord_scale);
 	}
 	ApplyClipSpace(m_graphics, context, vertex_info[tess_active ? 2u : 0u]);
 	static_zone.End();
@@ -4184,6 +4208,7 @@ PipelineCache::SpeculativeResult PipelineCache::PrepareGraphicsProgramsSpeculati
 	if (pixel_active) {
 		pixel_params = PrepareProgram(pixel_regs, sh, target_export_mapping, pixel_info);
 		ApplyDualSourceBlending(context, pixel_info);
+		ApplyFragCoordScale(context, pixel_info, true);
 	}
 	ApplyClipSpace(m_graphics, context, vertex_info);
 	if (read_failed()) {

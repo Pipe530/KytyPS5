@@ -69,6 +69,11 @@ struct ImageInfo {
 	Prospero::TileMode           tile_mode       = Prospero::TileMode::kLinear;
 	bool                         bgra16          = false;
 	std::array<ImageMipInfo, 16> mip_layout {};
+	// Host backing is created at the configured render scale; guest extent is unchanged.
+	bool render_scaled = false;
+
+	[[nodiscard]] bool RenderScaleEligible() const;
+
 
 	[[nodiscard]] constexpr bool HasStencil() const noexcept { return !stencil.Empty(); }
 	[[nodiscard]] constexpr bool HasMetadata() const noexcept {

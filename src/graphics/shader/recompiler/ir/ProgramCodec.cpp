@@ -36,12 +36,12 @@ static_assert(sizeof(StageInput) == 56, "IR::StageInput changed: update ProgramC
 static_assert(sizeof(StageOutput) == 48, "IR::StageOutput changed: update ProgramCodec");
 static_assert(sizeof(ShaderInfo) == 192, "IR::ShaderInfo changed: update ProgramCodec");
 static_assert(sizeof(DescriptorBinding) == 32, "IR::DescriptorBinding changed: update ProgramCodec");
-static_assert(sizeof(BindingLayout) == 64, "IR::BindingLayout changed: update ProgramCodec");
+static_assert(sizeof(BindingLayout) == 72, "IR::BindingLayout changed: update ProgramCodec");
 static_assert(sizeof(WriteRangeNode) == 24, "IR::WriteRangeNode changed: update ProgramCodec");
 static_assert(sizeof(WriteRangeAccess) == 20, "IR::WriteRangeAccess changed: update ProgramCodec");
 static_assert(sizeof(BufferWriteRange) == 40, "IR::BufferWriteRange changed: update ProgramCodec");
 static_assert(sizeof(WriteRangeProgram) == 48, "IR::WriteRangeProgram changed: update ProgramCodec");
-static_assert(sizeof(CompiledShaderInfo) == 344, "IR::CompiledShaderInfo changed: update ProgramCodec");
+static_assert(sizeof(CompiledShaderInfo) == 352, "IR::CompiledShaderInfo changed: update ProgramCodec");
 static_assert(sizeof(DescriptorSource) == 200, "IR::DescriptorSource changed: update ProgramCodec");
 static_assert(sizeof(DescriptorSource::IndirectImage) == 56,
               "IR::DescriptorSource::IndirectImage changed: update ProgramCodec");
@@ -669,6 +669,7 @@ void Write(CodecWriter& w, const BindingLayout& v) {
 	w.U32(v.memory_offset_dword);
 	w.U32(v.memory_offset_count);
 	w.U32(v.mip_stats_count);
+	w.U32(v.render_scale_count);
 	w.Words(v.user_data_registers);
 	WriteVector(w, v.descriptors);
 }
@@ -678,6 +679,7 @@ void Read(CodecReader& r, BindingLayout& v) {
 	v.memory_offset_dword   = r.U32();
 	v.memory_offset_count   = r.U32();
 	v.mip_stats_count       = r.U32();
+	v.render_scale_count    = r.U32();
 	v.user_data_registers   = r.Words();
 	ReadVector(r, v.descriptors);
 }

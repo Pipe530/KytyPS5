@@ -165,7 +165,8 @@ bool RenderExecutor::TryConsumeComputeImageClear(const ShaderComputeInputInfo& i
 		std::scoped_lock lock {cache.m_lock};
 		const auto&      image = cache.GetImage(binding.image_id);
 		const auto&      view  = binding.desc.view_info;
-		if (image.backing.format != vk::Format::eD32SfloatS8Uint || image.info.samples != 1 ||
+		if (image.IsScaled() || image.backing.format != vk::Format::eD32SfloatS8Uint ||
+		    image.info.samples != 1 ||
 		    image.info.stencil != destination || view.base_level >= image.backing.mip_levels ||
 		    view.base_layer >= image.backing.layers || view.layer_count != extents[2] ||
 		    view.layer_count > image.backing.layers - view.base_layer ||

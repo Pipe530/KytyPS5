@@ -167,7 +167,8 @@ public:
 	                    const HW::Context& context, const HW::UserConfig& user_config,
 	                    std::span<const Prospero::ColorComponentMapping, 8> target_export_mapping,
 	                    bool pixel_active, std::array<ShaderVertexInputInfo, 3>& vertex_info,
-	                    ShaderPixelInputInfo& pixel_info, GraphicsStagePreps& stage_preps);
+	                    ShaderPixelInputInfo& pixel_info, GraphicsStagePreps& stage_preps,
+	                    bool allow_frag_coord_scale = true);
 	// Draw-prep: the program preparation of one draw as GetGraphicsPrograms would do it, but
 	// speculative: every guest read goes through the active DrawPrep recorder (readSet.h), nothing
 	// is synchronized or read back. Normally uses only published programs; the optional

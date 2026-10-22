@@ -144,10 +144,10 @@ bool SameImageDesc(const TextureCache::ImageDesc& a, const TextureCache::ImageDe
 	const auto& [b_info, b_view, b_type, b_cmask] = b;
 	const auto& [a_data, a_stencil, a_meta, a_htile_clear_mask, a_pixel_format, a_guest_format,
 	             a_image_type, a_extent, a_resources, a_pitch, a_bytes_per_block, a_samples,
-	             a_tile_mode, a_bgra16, a_mip_layout] = a_info;
+	             a_tile_mode, a_bgra16, a_mip_layout, a_render_scaled] = a_info;
 	const auto& [b_data, b_stencil, b_meta, b_htile_clear_mask, b_pixel_format, b_guest_format,
 	             b_image_type, b_extent, b_resources, b_pitch, b_bytes_per_block, b_samples,
-	             b_tile_mode, b_bgra16, b_mip_layout] = b_info;
+	             b_tile_mode, b_bgra16, b_mip_layout, b_render_scaled] = b_info;
 	const auto& [a_range, a_kind, a_control, a_dcc_clear_word, a_compression,
 	             a_stencil_compressed, a_dcc_clear_register_valid, a_dcc_alpha_msb] = a_meta;
 	const auto& [b_range, b_kind, b_control, b_dcc_clear_word, b_compression,
@@ -164,7 +164,8 @@ bool SameImageDesc(const TextureCache::ImageDesc& a, const TextureCache::ImageDe
 	       a_image_type == b_image_type && a_extent == b_extent && a_resources == b_resources &&
 	       a_pitch == b_pitch && a_bytes_per_block == b_bytes_per_block &&
 	       a_samples == b_samples && a_tile_mode == b_tile_mode && a_bgra16 == b_bgra16 &&
-	       a_mip_layout == b_mip_layout && a_view == b_view && a_type == b_type &&
+	       a_mip_layout == b_mip_layout && a_render_scaled == b_render_scaled &&
+	       a_view == b_view && a_type == b_type &&
 	       a_cmask_range == b_cmask_range && a_clear_word0 == b_clear_word0 &&
 	       a_clear_word1 == b_clear_word1 && a_cmask_valid == b_cmask_valid;
 }
@@ -544,6 +545,7 @@ void RenderExecutor::ResolveRenderColorTarget(CommandBuffer& buffer, RenderColor
 	desc.info.bytes_per_block = bytes_per_element;
 	desc.info.samples         = samples;
 	desc.info.tile_mode       = rt.attrib3.tile_mode;
+	desc.info.render_scaled  = desc.info.RenderScaleEligible();
 	const bool has_dcc        = rt.info.dcc_compression_enable && rt.dcc_addr.addr != 0;
 	if (has_dcc) {
 		TileSizeAlign metadata_size {};

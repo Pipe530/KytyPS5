@@ -182,6 +182,8 @@ struct ShaderPixelInputInfo {
 	bool                                           ps_pos_w                     = false;
 	bool                                           ps_front_face                = false;
 	bool                                           ps_ancillary                 = false;
+	// Host-to-guest pixel coordinate factor for render-scaled targets (1 = unscaled).
+	float                                          ps_frag_coord_scale          = 1.0f;
 	bool                                           ps_no_perspective            = false;
 	bool                                           ps_pixel_kill_enable         = false;
 	bool                                           ps_depth_export_enable       = false;

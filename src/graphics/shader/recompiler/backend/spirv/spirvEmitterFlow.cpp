@@ -101,7 +101,16 @@ uint32_t EmitBuiltinU32(EmitterState& state, IR::StageInputKind kind, uint32_t c
 		                          TypePointer(state, spv::StorageClassInput, TypeF32(state)),
 		                          pointer, variable, ConstantU32(state, component));
 		state.builder.AddFunction(spv::OpLoad, TypeF32(state), value, pointer);
-		state.builder.AddFunction(spv::OpBitcast, TypeU32(state), bits, value);
+		auto result = value;
+		if (kind == IR::StageInputKind::FragCoord && component < 2u &&
+		    state.input_info.pixel != nullptr &&
+		    state.input_info.pixel->ps_frag_coord_scale != 1.0f) {
+			result = state.builder.AllocateId();
+			state.builder.AddFunction(
+			    spv::OpFMul, TypeF32(state), result, value,
+			    ConstantF32Value(state, state.input_info.pixel->ps_frag_coord_scale));
+		}
+		state.builder.AddFunction(spv::OpBitcast, TypeU32(state), bits, result);
 		return bits;
 	}
 	if (centroid || kind == IR::StageInputKind::BaryCoordSmooth ||

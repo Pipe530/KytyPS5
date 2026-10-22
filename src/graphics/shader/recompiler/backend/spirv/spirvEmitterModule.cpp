@@ -3,6 +3,8 @@
 
 #include "graphics/shader/recompiler/backend/spirv/SpirvEmitter.h"
 
+#include "common/emulatorConfig.h"
+
 #include <algorithm>
 #include <bit>
 #include <cinttypes>

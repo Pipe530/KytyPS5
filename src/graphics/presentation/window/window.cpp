@@ -514,9 +514,13 @@ void WindowContext::ProcessEvent(double time_s) {
 	auto& game  = loop;
 	auto* event = &game.event;
 	if ((event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP) &&
-	    event->key.key == SDLK_F7) {
+	    (event->key.key == SDLK_F7 || event->key.key == SDLK_F9)) {
 		if (event->type == SDL_EVENT_KEY_DOWN && event->key.repeat == 0) {
-			HostInputToggleMouseToJoystick();
+			if (event->key.key == SDLK_F7) {
+				HostInputToggleMouseToJoystick();
+			} else if (event->key.key == SDLK_F9) {
+				Config::SetFsrEnabled(!Config::FsrEnabled());
+			}
 		}
 		return;
 	}

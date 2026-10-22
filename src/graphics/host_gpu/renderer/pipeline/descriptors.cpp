@@ -1790,6 +1790,22 @@ void RenderExecutor::RebindBuffers(PreparedBindings& prepared) {
 	prepared.mip_stats_active = plan_shader_data
 	                                ? prepared.plan->mip_stats_active
 	                                : WriteMipStatsFields(program, snapshot, prepared.shader_data);
+	if (layout.render_scale_count != 0) {
+		// Host/guest size ratio of each image, for integer texel coordinates (render scale).
+		const auto base = layout.RenderScaleOffsetDword();
+		for (uint32_t i = 0; i < layout.render_scale_count; i++) {
+			float      ratio = 1.0f;
+			const auto id    = i < prepared.images.size() ? prepared.images[i].image_id : ImageId {};
+			if (id) {
+				const auto& image = m_context.GetTextureCache().GetImage(id);
+				if (image.IsScaled() && image.info.extent.width != 0) {
+					ratio = static_cast<float>(image.backing.extent.width) /
+					        static_cast<float>(image.info.extent.width);
+				}
+			}
+			prepared.shader_data[base + i] = std::bit_cast<uint32_t>(ratio);
+		}
+	}
 	// Upload sites: stage type and table kind (the dedup checks the site's last entry first).
 	const auto site = static_cast<uint32_t>(program.stage) * 2u;
 	prepared.fresh_upload = false;

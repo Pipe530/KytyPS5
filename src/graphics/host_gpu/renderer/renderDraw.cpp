@@ -567,7 +567,7 @@ static void SetGraphicsDynamicParams(const CommandBuffer& buffer, const CommandS
 
 	const auto& ctx = buffer.GetRegisters();
 	const auto&        vp  = ctx.GetScreenViewport();
-	const vk::Extent2D framebuffer_extent {rendering.width, rendering.height};
+	const vk::Extent2D framebuffer_extent {rendering.guest_width, rendering.guest_height};
 	constexpr uint32_t viewport_slots = std::size(HW::ScreenViewport {}.viewports);
 	std::array<vk::Viewport, viewport_slots> viewports {};
 	std::array<vk::Rect2D, viewport_slots>   scissors {};
@@ -625,6 +625,36 @@ static void SetGraphicsDynamicParams(const CommandBuffer& buffer, const CommandS
 			if (!same) {
 				DrawPrep::ReportBindingMismatch("dynamic viewports", viewport_count);
 			}
+		}
+	}
+	const float scale_x = rendering.guest_width != 0
+	                          ? static_cast<float>(rendering.width) / rendering.guest_width
+	                          : 1.0f;
+	const float scale_y = rendering.guest_height != 0
+	                          ? static_cast<float>(rendering.height) / rendering.guest_height
+	                          : 1.0f;
+	if (scale_x != 1.0f || scale_y != 1.0f) {
+		// Render scale: the guest-sized viewport and scissor are mapped onto the larger host image.
+		for (uint32_t i = 0; i < viewport_count; i++) {
+			auto& viewport = viewports[i];
+			auto& scissor  = scissors[i];
+			viewport.x *= scale_x;
+			viewport.y *= scale_y;
+			viewport.width *= scale_x;
+			viewport.height *= scale_y;
+			const auto left   = static_cast<int32_t>(std::floor(scissor.offset.x * scale_x));
+			const auto top    = static_cast<int32_t>(std::floor(scissor.offset.y * scale_y));
+			const auto right  = static_cast<int32_t>(std::ceil(
+                (scissor.offset.x + static_cast<int32_t>(scissor.extent.width)) * scale_x));
+			const auto bottom = static_cast<int32_t>(std::ceil(
+                (scissor.offset.y + static_cast<int32_t>(scissor.extent.height)) * scale_y));
+			const auto max_x  = static_cast<int32_t>(rendering.width);
+			const auto max_y  = static_cast<int32_t>(rendering.height);
+			const auto cl     = std::clamp(left, 0, max_x);
+			const auto ct     = std::clamp(top, 0, max_y);
+			scissor.offset    = {cl, ct};
+			scissor.extent    = {static_cast<uint32_t>(std::clamp(right, cl, max_x) - cl),
+			                     static_cast<uint32_t>(std::clamp(bottom, ct, max_y) - ct)};
 		}
 	}
 	static_assert(viewport_slots <= GraphicsDynamicStateShadow::MaxViewports);
@@ -890,6 +920,8 @@ RenderState RenderExecutor::AcquireRenderTargets(CommandBuffer& buffer, RenderCo
 	RenderState state {};
 	state.width                 = std::numeric_limits<uint32_t>::max();
 	state.height                = std::numeric_limits<uint32_t>::max();
+	state.guest_width           = std::numeric_limits<uint32_t>::max();
+	state.guest_height          = std::numeric_limits<uint32_t>::max();
 	state.num_layers            = std::numeric_limits<uint32_t>::max();
 	state.num_color_attachments = 0;
 	for (uint32_t i = 0; i < color_count; i++) {
@@ -916,8 +948,13 @@ RenderState RenderExecutor::AcquireRenderTargets(CommandBuffer& buffer, RenderCo
 		                                     view.layer_count},
 		              buffer.Identity(), true);
 		const auto extent       = target.Extent();
-		state.width             = std::min(state.width, extent.width);
-		state.height            = std::min(state.height, extent.height);
+		const auto host_extent  = image.IsScaled() ? vk::Extent2D {image.backing.extent.width,
+		                                                           image.backing.extent.height}
+		                                           : vk::Extent2D {extent.width, extent.height};
+		state.width             = std::min(state.width, host_extent.width);
+		state.height            = std::min(state.height, host_extent.height);
+		state.guest_width       = std::min(state.guest_width, extent.width);
+		state.guest_height      = std::min(state.guest_height, extent.height);
 		state.num_layers        = std::min(state.num_layers, view.layer_count);
 		state.num_color_attachments = std::max(state.num_color_attachments, target.target_slot + 1);
 		auto& attachment            = state.color_attachments[target.target_slot];
@@ -1056,8 +1093,14 @@ RenderState RenderExecutor::AcquireRenderTargets(CommandBuffer& buffer, RenderCo
 		              ImageSubresourceRange {view.base_level, view.level_count, view.base_layer,
 		                                     view.layer_count},
 		              buffer.Identity(), true);
-		state.width               = std::min(state.width, depth.desc.info.extent.width);
-		state.height              = std::min(state.height, depth.desc.info.extent.height);
+		state.width               = std::min(state.width, image.IsScaled()
+		                                                      ? image.backing.extent.width
+		                                                      : depth.desc.info.extent.width);
+		state.height              = std::min(state.height, image.IsScaled()
+		                                                       ? image.backing.extent.height
+		                                                       : depth.desc.info.extent.height);
+		state.guest_width         = std::min(state.guest_width, depth.desc.info.extent.width);
+		state.guest_height        = std::min(state.guest_height, depth.desc.info.extent.height);
 		state.num_layers          = std::min(state.num_layers, view.layer_count);
 		const auto aspects        = ImageViewOps::DepthAspectMask(depth.desc.view_info.format);
 		auto&      attachment     = state.depth_stencil_attachment;
@@ -1074,6 +1117,8 @@ RenderState RenderExecutor::AcquireRenderTargets(CommandBuffer& buffer, RenderCo
 		const auto& limits = buffer.GetGraphics().GetPhysicalDeviceProperties().limits;
 		state.width        = limits.maxFramebufferWidth;
 		state.height       = limits.maxFramebufferHeight;
+		state.guest_width  = state.width;
+		state.guest_height = state.height;
 	}
 	if (state.num_layers == std::numeric_limits<uint32_t>::max()) {
 		state.num_layers = 1;
@@ -1933,7 +1978,7 @@ static void ApplyPreparedDraw(DrawPrep::PreparedDraw& prepared, DrawRenderState&
 }
 
 static void RefreshShaders(CommandBuffer& buffer, const DrawCallInfo& draw,
-                           DrawRenderState& state) {
+                           DrawRenderState& state, bool allow_frag_coord_scale = true) {
 	auto& ctx    = buffer.GetRegisters();
 	auto& sh_ctx = buffer.GetShaders();
 
@@ -2014,7 +2059,7 @@ static void RefreshShaders(CommandBuffer& buffer, const DrawCallInfo& draw,
 	state.programs = pipeline_cache.GetGraphicsPrograms(
 	    vertex_shader_info, pixel_shader_info, shader_regs, ctx, buffer.GetUserConfig(),
 	    target_export_mapping, state.ps_active, state.vertex_info, state.ps_input_info,
-	    state.stage_preps);
+	    state.stage_preps, allow_frag_coord_scale);
 }
 
 bool RenderExecutor::PrepareDrawRenderState(CommandBuffer& buffer, const DrawCallInfo& draw,
@@ -2055,6 +2100,16 @@ bool RenderExecutor::PrepareDrawRenderState(CommandBuffer& buffer, const DrawCal
 	}
 	KYTY_PROFILER_DETAIL_BLOCK("Draw::ResolveTargets");
 	DrawRunTargets(buffer, draw, render_target_slice_offset, state);
+	if (state.ps_active && state.ps_input_info.ps_frag_coord_scale != 1.0f) {
+		// The shader scale was chosen from register sizes; drop it if the target ended up unscaled.
+		auto&      texture_cache = buffer.GetContext().GetTextureCache();
+		const bool target_scaled =
+		    state.color_count > 0 && state.color_info[0].image_id &&
+		    texture_cache.GetImage(state.color_info[0].image_id).IsScaled();
+		if (!target_scaled) {
+			RefreshShaders(buffer, draw, state, false);
+		}
+	}
 
 	if (state.color_count == 0 && !state.depth_info.image_id && !state.ps_active) {
 		LogFramebufferSkip(draw.Name(), state.color_info[0], state.depth_info, buffer,

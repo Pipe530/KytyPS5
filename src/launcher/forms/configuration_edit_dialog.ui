@@ -179,6 +179,52 @@
           <property name="text"><string>Auto-hide cursor</string></property>
          </widget>
         </item>
+        <item row="9" column="1">
+         <widget class="QCheckBox" name="checkBox_fsr">
+          <property name="toolTip"><string>Upscale the final image to the window with FSR 1.0 (EASU + RCAS). Applies when the game image is smaller than the window.</string></property>
+          <property name="text"><string>Enable FSR 1.0 upscaling</string></property>
+         </widget>
+        </item>
+        <item row="10" column="0">
+         <widget class="QLabel" name="label_render_scale">
+          <property name="text"><string>Render scale (experimental):</string></property>
+         </widget>
+        </item>
+        <item row="10" column="1">
+         <widget class="QDoubleSpinBox" name="doubleSpinBox_render_scale">
+          <property name="toolTip"><string>Internal resolution of the final video-out render target. Values below 1.0 reduce GPU load; enable FSR to upscale. May cause glitches in some games.</string></property>
+          <property name="decimals"><number>2</number></property>
+          <property name="minimum"><double>0.15</double></property>
+          <property name="maximum"><double>1.0</double></property>
+          <property name="singleStep"><double>0.05</double></property>
+          <property name="value"><double>1.0</double></property>
+         </widget>
+        </item>
+        <item row="11" column="0">
+         <widget class="QLabel" name="label_fsr_sharpness">
+          <property name="text"><string>FSR sharpness:</string></property>
+         </widget>
+        </item>
+        <item row="11" column="1">
+         <widget class="QDoubleSpinBox" name="doubleSpinBox_fsr_sharpness">
+          <property name="toolTip"><string>FSR RCAS sharpening strength. 0 is softest, 1 is sharpest. Default 0.9.</string></property>
+          <property name="decimals"><number>2</number></property>
+          <property name="minimum"><double>0.0</double></property>
+          <property name="maximum"><double>1.0</double></property>
+          <property name="singleStep"><double>0.05</double></property>
+          <property name="value"><double>0.9</double></property>
+         </widget>
+        </item>
+        <item row="12" column="0">
+         <widget class="QLabel" name="label_render_height">
+          <property name="text"><string>Internal resolution (experimental):</string></property>
+         </widget>
+        </item>
+        <item row="12" column="1">
+         <widget class="QComboBox" name="comboBox_render_height">
+          <property name="toolTip"><string>Fixed internal height for the final video-out render target, never above what the game renders. Overrides the render scale. Enable FSR to upscale. May cause glitches in some games.</string></property>
+         </widget>
+        </item>
        </layout>
       </widget>
      </item>

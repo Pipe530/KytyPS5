@@ -3,6 +3,7 @@
 #include "common/assert.h"
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 
 namespace Config {
@@ -62,6 +63,42 @@ uint32_t GetControllerVibrationIntensity() {
 
 PresentMode GetPresentMode() {
 	return g_config->present_mode;
+}
+
+float GetRenderScale() {
+	const float value = g_config->render_scale;
+	return std::isfinite(value) ? std::clamp(value, MIN_RENDER_SCALE, 1.0f) : 1.0f;
+}
+
+uint32_t GetRenderHeight() {
+	const uint32_t value = g_config->render_height;
+	return value == 0 ? 0 : std::clamp(value, MIN_RENDER_HEIGHT, MAX_RENDER_HEIGHT);
+}
+
+bool RenderScaleActive() {
+	return GetRenderHeight() != 0 || GetRenderScale() < 1.0f;
+}
+
+float GetRenderScaleFor(uint32_t guest_height) {
+	const uint32_t height = GetRenderHeight();
+	if (height == 0 || guest_height == 0) {
+		return GetRenderScale();
+	}
+	return std::clamp(static_cast<float>(height) / static_cast<float>(guest_height),
+	                  MIN_RENDER_SCALE, 1.0f);
+}
+
+bool FsrEnabled() {
+	return g_config->fsr_enabled;
+}
+
+void SetFsrEnabled(bool enabled) {
+	g_config->fsr_enabled = enabled;
+}
+
+float GetFsrSharpness() {
+	const float value = g_config->fsr_sharpness;
+	return std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 0.9f;
 }
 
 int32_t GetGpuIndex() {

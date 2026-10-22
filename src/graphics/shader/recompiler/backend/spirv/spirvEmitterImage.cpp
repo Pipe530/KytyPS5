@@ -291,6 +291,55 @@ uint32_t ResultVector(ValueEmitContext& ctx, uint32_t value,
 	return result;
 }
 
+uint32_t RenderScaleRatio(ValueEmitContext& ctx, uint32_t resource) {
+	const auto& layout = ctx.state.program.bindings;
+	if (resource >= layout.render_scale_count) {
+		return 0;
+	}
+	return Unary(ctx.state, spv::OpBitcast, TypeF32(ctx.state),
+	             EmitShaderDataDwordLoad(ctx.state, layout.RenderScaleOffsetDword() + resource));
+}
+
+// Guest texel coordinate (or size) -> host texel coordinate of a render-scaled image.
+uint32_t ScaleTexelComponent(ValueEmitContext& ctx, uint32_t value, uint32_t ratio, bool inverse) {
+	auto&      state = ctx.state;
+	const auto f     = Unary(state, spv::OpConvertUToF, TypeF32(state), value);
+	const auto half  = ConstantF32Value(state, 0.5f);
+	uint32_t   scaled;
+	if (inverse) {
+		scaled = Binary(state, spv::OpFAdd, TypeF32(state),
+		                Binary(state, spv::OpFDiv, TypeF32(state), f, ratio), half);
+	} else {
+		scaled = Binary(state, spv::OpFMul, TypeF32(state),
+		                Binary(state, spv::OpFAdd, TypeF32(state), f, half), ratio);
+	}
+	return Unary(state, spv::OpConvertFToU, TypeU32(state), scaled);
+}
+
+uint32_t ScaleTexelCoord(ValueEmitContext& ctx, uint32_t coord, uint32_t resource,
+                         ImageDimension dimension) {
+	const auto ratio      = RenderScaleRatio(ctx, resource);
+	const auto components = ImageDimensionInfoFor(dimension).coordinate_components;
+	if (ratio == 0 || components < 2u) return coord;
+	auto&    state = ctx.state;
+	uint32_t parts[3] {};
+	for (uint32_t i = 0; i < components; i++) {
+		parts[i] = state.builder.AllocateId();
+		state.builder.AddFunction(spv::OpCompositeExtract, TypeU32(state), parts[i], coord, i);
+	}
+	parts[0] = ScaleTexelComponent(ctx, parts[0], ratio, false);
+	parts[1] = ScaleTexelComponent(ctx, parts[1], ratio, false);
+	const auto result = state.builder.AllocateId();
+	if (components == 3u) {
+		state.builder.AddFunction(spv::OpCompositeConstruct, TypeU32Vector(state, 3), result,
+		                          parts[0], parts[1], parts[2]);
+	} else {
+		state.builder.AddFunction(spv::OpCompositeConstruct, TypeU32Vector(state, 2), result,
+		                          parts[0], parts[1]);
+	}
+	return result;
+}
+
 uint32_t QueryDimensions(ValueEmitContext& ctx, const IR::MemoryInfo& mem,
                          const IR::Inst& address) {
 	const auto  dimension = ctx.state.program.info.images.at(mem.resource).dimension;
@@ -321,6 +370,12 @@ uint32_t QueryDimensions(ValueEmitContext& ctx, const IR::MemoryInfo& mem,
 		result[3] = ctx.state.builder.AllocateId();
 		ctx.state.builder.AddFunction(spv::OpImageQueryLevels, TypeU32(ctx.state), result[3],
 		                              image);
+	}
+	if (components >= 2u) {
+		if (const auto ratio = RenderScaleRatio(ctx, mem.resource); ratio != 0) {
+			result[0] = ScaleTexelComponent(ctx, result[0], ratio, true);
+			result[1] = ScaleTexelComponent(ctx, result[1], ratio, true);
+		}
 	}
 	const auto vector = ctx.state.builder.AllocateId();
 	ctx.state.builder.AddFunction(spv::OpCompositeConstruct, TypeU32Vector(ctx.state, 4), vector,
@@ -1006,7 +1061,8 @@ void EmitImage(ValueEmitContext& ctx, const IR::Inst& inst) {
 		        [&]() {
 			        const auto descriptor = LoadImageDescriptor(state, mem.resource);
 			        const auto color      = state.builder.AllocateId();
-			        const auto coord      = CoordU32(ctx, mem, *address, dimension);
+			        const auto coord      = ScaleTexelCoord(
+			            ctx, CoordU32(ctx, mem, *address, dimension), mem.resource, dimension);
 			        if (dimension_info.multisampled != 0u) {
 				        state.builder.AddFunction(
 				            spv::OpImageFetch, ImageVectorType(state, numeric_class, 4), color,
@@ -1031,7 +1087,8 @@ void EmitImage(ValueEmitContext& ctx, const IR::Inst& inst) {
 			    state.program.info.images[mem.resource].mip_mode == IR::ImageMipMode::Dynamic
 			        ? LodU32(ctx, mem, *address, dimension)
 			        : 0u;
-			const auto coord = CoordU32(ctx, mem, *address, dimension);
+			const auto coord = ScaleTexelCoord(
+			    ctx, CoordU32(ctx, mem, *address, dimension), mem.resource, dimension);
 			const auto texel = StoreTexel(ctx, mem, ctx.Arg(inst, 2), uint_image);
 			EmitStorageImageWrite(state, mem.resource, mip_lod, coord, texel);
 		});

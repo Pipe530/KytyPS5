@@ -14,6 +14,8 @@
 #include <QStringList>
 #include <QVariant>
 
+#include <algorithm>
+
 #define KYTY_CFG_SET(n) s->setValue(#n, QVariant::fromValue(n).toString());
 #define KYTY_CFG_GET(n) n = s->value(#n).value<decltype(n)>();
 
@@ -118,6 +120,10 @@ public:
 	QString                audio_input_device;
 	PresentMode            present_mode                = PresentMode::Mailbox;
 	int                    gpu_index                   = -1;
+	bool                   fsr_enabled                 = false;
+	float                  render_scale                = 1.0f;
+	uint32_t               render_height               = 0;
+	float                  fsr_sharpness               = 0.9f;
 	bool                   fullscreen_enabled          = false;
 	bool                   hide_cursor_enabled         = false;
 	bool                   readback_linear_images      = false;
@@ -150,6 +156,10 @@ public:
 		audio_input_device          = other.audio_input_device;
 		present_mode                = other.present_mode;
 		gpu_index                   = other.gpu_index;
+		fsr_enabled                 = other.fsr_enabled;
+		render_scale                = other.render_scale;
+		render_height               = other.render_height;
+		fsr_sharpness               = other.fsr_sharpness;
 		fullscreen_enabled          = other.fullscreen_enabled;
 		hide_cursor_enabled         = other.hide_cursor_enabled;
 		readback_linear_images      = other.readback_linear_images;
@@ -197,6 +207,10 @@ public:
 		KYTY_CFG_SET(audio_input_device);
 		KYTY_CFG_SET(present_mode);
 		KYTY_CFG_SET(gpu_index);
+		KYTY_CFG_SET(fsr_enabled);
+		KYTY_CFG_SET(render_scale);
+		KYTY_CFG_SET(render_height);
+		KYTY_CFG_SET(fsr_sharpness);
 		KYTY_CFG_SET(fullscreen_enabled);
 		KYTY_CFG_SET(hide_cursor_enabled);
 		KYTY_CFG_SET(readback_linear_images);
@@ -241,6 +255,15 @@ public:
 			present_mode = PresentMode::Mailbox;
 		}
 		KYTY_CFG_GET(fullscreen_enabled);
+		KYTY_CFG_GET(fsr_enabled);
+		render_scale = std::clamp(s->value("render_scale", render_scale).toFloat(),
+		                          Config::MIN_RENDER_SCALE, 1.0f);
+		render_height = s->value("render_height", render_height).toUInt();
+		if (render_height != 0) {
+			render_height =
+			    std::clamp(render_height, Config::MIN_RENDER_HEIGHT, Config::MAX_RENDER_HEIGHT);
+		}
+		fsr_sharpness = std::clamp(s->value("fsr_sharpness", fsr_sharpness).toFloat(), 0.0f, 1.0f);
 		KYTY_CFG_GET(hide_cursor_enabled);
 		KYTY_CFG_GET(readback_linear_images);
 		KYTY_CFG_GET(tessellation_enabled);

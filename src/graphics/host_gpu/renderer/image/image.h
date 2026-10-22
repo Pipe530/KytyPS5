@@ -419,8 +419,12 @@ public:
 		return pages ? ImagePageRangesOverlap(live.address, live.size, address, size)
 		             : ImageRangeOverlaps(live.address, live.size, address, size);
 	}
+	[[nodiscard]] bool IsScaled() const noexcept {
+		return backing.image != nullptr && (backing.extent.width != info.extent.width ||
+		                                    backing.extent.height != info.extent.height);
+	}
 	[[nodiscard]] bool SafeToDownload() const noexcept {
-		return OwnsAllBytes() && !IsBufferModified() && !IsCpuDirty();
+		return OwnsAllBytes() && !IsBufferModified() && !IsCpuDirty() && !IsScaled();
 	}
 	[[nodiscard]] bool IsTracked() const noexcept { return track_addr != 0 && track_addr_end != 0; }
 	[[nodiscard]] uint64_t AccountedSize() const noexcept {

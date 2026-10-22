@@ -97,6 +97,7 @@ bool PlanShaderData(const CompiledShaderInfo& program, const ResourceSnapshot& r
 		}
 	}
 	if (layout.memory_offset_dword > dwords || layout.mip_stats_count > resources.images.size() ||
+	    layout.render_scale_count > resources.images.size() ||
 	    (layout.mip_stats_count != 0 &&
 	     layout.MipStatsOffsetDword() + layout.mip_stats_count > dwords)) {
 		return false;

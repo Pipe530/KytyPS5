@@ -34,6 +34,9 @@ constexpr uint32_t DEFAULT_CONSOLE_LANGUAGE = 1;
 constexpr uint32_t MAX_CONSOLE_LANGUAGE     = 29;
 constexpr std::size_t MAX_USER_NAME_LENGTH = 16;
 constexpr int32_t DEFAULT_USER_ID           = 1000;
+constexpr float   MIN_RENDER_SCALE          = 0.15f;
+constexpr uint32_t MIN_RENDER_HEIGHT        = 360;
+constexpr uint32_t MAX_RENDER_HEIGHT        = 2160;
 
 constexpr bool IsConfiguredUserIdValid(int32_t user_id) {
 	constexpr int32_t USER_ID_EVERYONE = 0xfe;
@@ -51,6 +54,10 @@ struct ConfigOptions {
 	uint32_t               controller_speaker_volume      = 100;
 	uint32_t               controller_vibration_intensity = 100;
 	PresentMode            present_mode                = PresentMode::Mailbox;
+	float                  render_scale                = 1.0f;
+	uint32_t               render_height               = 0;
+	float                  fsr_sharpness               = 0.9f;
+	bool                   fsr_enabled                 = false;
 	int32_t                gpu_index                   = -1;
 	bool                   fullscreen_enabled          = false;
 	bool                   hide_cursor_enabled         = false;
@@ -92,6 +99,19 @@ const std::optional<ControllerColor>& GetControllerColor();
 uint32_t GetControllerSpeakerVolume();
 uint32_t GetControllerVibrationIntensity();
 PresentMode GetPresentMode();
+// Internal resolution scale for video-out render targets, in [MIN_RENDER_SCALE, 1].
+float    GetRenderScale();
+// Fixed internal height for video-out render targets; 0 selects GetRenderScale() instead.
+uint32_t GetRenderHeight();
+// True when render targets may be scaled below their guest size.
+bool     RenderScaleActive();
+// Scale for a guest target of this height: render_height / height (at most 1) or GetRenderScale().
+float    GetRenderScaleFor(uint32_t guest_height);
+// Spatial FSR 1.0 pass on the presentation path.
+bool     FsrEnabled();
+void     SetFsrEnabled(bool enabled);
+// RCAS sharpening strength in [0, 1]; 1 is the strongest.
+float    GetFsrSharpness();
 int32_t GetGpuIndex();
 bool     FullscreenEnabled();
 bool     HideCursorEnabled();

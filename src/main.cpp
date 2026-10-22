@@ -108,6 +108,10 @@ static void PrintUsage() {
 	::printf(
 	    "  --gpu <index>                        Vulkan physical device index. Default: auto.\n");
 	::printf("  --fullscreen                         Run in borderless desktop fullscreen.\n");
+	::printf("  --fsr                                Upscale the final image with FSR 1.0.\n");
+	::printf("  --fsr-sharpness <0-1>                FSR RCAS sharpening strength. Default: 0.9.\n");
+	::printf("  --render-scale <0.15-1>              Internal resolution of the final video-out render target (experimental). Default: 1.\n");
+	::printf("  --render-height <360-2160>           Fixed internal height instead of --render-scale, never above the game's own (experimental). Default: 0 (off).\n");
 	::printf(
 	    "  --hide-cursor                        Hide the cursor after 2 s idle. Default: off.\n");
 	::printf("  --vr                                 Enable the virtual VR headset.\n");
@@ -211,6 +215,28 @@ static bool ParseControllerColor(const std::string& value, Config::ControllerCol
 	return true;
 }
 
+static bool ParseRenderScale(const std::string& value, float& out) {
+	float number      = 0.0f;
+	auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), number);
+	if (error != std::errc {} || end != value.data() + value.size() ||
+	    !(number >= Config::MIN_RENDER_SCALE) || number > 1.0f) {
+		return false;
+	}
+	out = number;
+	return true;
+}
+
+static bool ParseFsrSharpness(const std::string& value, float& out) {
+	float number      = 0.0f;
+	auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), number);
+	if (error != std::errc {} || end != value.data() + value.size() || !(number >= 0.0f) ||
+	    number > 1.0f) {
+		return false;
+	}
+	out = number;
+	return true;
+}
+
 static bool ParseInt32(const std::string& value, int32_t& out) {
 	int32_t number    = 0;
 	auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), number);
@@ -251,6 +277,11 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 
 		if (arg == "--fullscreen") {
 			options.config.fullscreen_enabled = true;
+			continue;
+		}
+
+		if (arg == "--fsr") {
+			options.config.fsr_enabled = true;
 			continue;
 		}
 
@@ -400,6 +431,26 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 		} else if (arg == "--gpu") {
 			if (!ParseInt32(value, options.config.gpu_index)) {
 				::printf("invalid gpu index: %s\n", value.c_str());
+				return false;
+			}
+		} else if (arg == "--fsr-sharpness") {
+			if (!ParseFsrSharpness(value, options.config.fsr_sharpness)) {
+				::printf("invalid FSR sharpness (expected 0-1): %s\n", value.c_str());
+				return false;
+			}
+		} else if (arg == "--render-scale") {
+			if (!ParseRenderScale(value, options.config.render_scale)) {
+				::printf("invalid render scale (expected %g-1): %s\n",
+				         static_cast<double>(Config::MIN_RENDER_SCALE), value.c_str());
+				return false;
+			}
+		} else if (arg == "--render-height") {
+			if (!ParseUint32(value, options.config.render_height) ||
+			    (options.config.render_height != 0 &&
+			     (options.config.render_height < Config::MIN_RENDER_HEIGHT ||
+			      options.config.render_height > Config::MAX_RENDER_HEIGHT))) {
+				::printf("invalid render height (expected 0 or %u-%u): %s\n",
+				         Config::MIN_RENDER_HEIGHT, Config::MAX_RENDER_HEIGHT, value.c_str());
 				return false;
 			}
 		} else if (arg == "--vblank-frequency") {

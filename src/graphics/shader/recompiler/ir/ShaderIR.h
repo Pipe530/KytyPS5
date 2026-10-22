@@ -456,14 +456,20 @@ struct BindingLayout {
 	// counter id, base level, no-counter flag, counting threshold), after the memory offsets.
 	// Non-zero only for shaders instrumented for mip statistics.
 	uint32_t                       mip_stats_count = 0;
+	// Per-image host/guest size ratio (one float dword each, after the mip statistics) for the
+	// images of shaders that fetch texels by integer coordinates while render scaling is on.
+	uint32_t                       render_scale_count = 0;
 	std::vector<uint32_t>          user_data_registers;
 	std::vector<DescriptorBinding> descriptors;
 
 	[[nodiscard]] uint32_t MipStatsOffsetDword() const {
 		return memory_offset_dword + (memory_offset_count + 3u) / 4u;
 	}
-	[[nodiscard]] uint32_t ShaderDataDwords() const {
+	[[nodiscard]] uint32_t RenderScaleOffsetDword() const {
 		return MipStatsOffsetDword() + mip_stats_count;
+	}
+	[[nodiscard]] uint32_t ShaderDataDwords() const {
+		return RenderScaleOffsetDword() + render_scale_count;
 	}
 	[[nodiscard]] bool UsesPushData() const {
 		return push_data_start_dword != PushData::NoStart;

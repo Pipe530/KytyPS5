@@ -240,6 +240,12 @@ static QStringList CreateEmulatorArgs(const Configuration& info) {
 	if (info.fullscreen_enabled) {
 		args << "--fullscreen";
 	}
+	if (info.fsr_enabled) {
+		args << "--fsr";
+	}
+	args << "--render-scale" << QString::number(info.render_scale, 'f', 2);
+	args << "--render-height" << QString::number(info.render_height);
+	args << "--fsr-sharpness" << QString::number(info.fsr_sharpness, 'f', 2);
 	if (info.hide_cursor_enabled) {
 		args << "--hide-cursor";
 	}

@@ -1,5 +1,6 @@
 #include "graphics/shader/recompiler/CodegenFingerprint.h"
 
+#include "common/emulatorConfig.h"
 #include "common/rendererBatch.h"
 #include "graphics/host_gpu/renderer/cache/bufferCache.h"
 #include "graphics/shader/recompiler/CodegenOptions.h"
@@ -93,6 +94,10 @@ std::vector<uint8_t> CodegenFingerprint() {
 	b.U32(options.dispatcher_cap);
 	b.U8(options.ir_linear_uses ? 1u : 0u);
 	b.U8(options.fold_lane_masks ? 1u : 0u);
+	// Image fetch shaders carry per-image scale dwords while render scaling is on.
+	if (Config::RenderScaleActive()) {
+		b.Text("render_scale");
+	}
 
 	// Host device state the emitter reads (set once by the device layer).
 	const auto float_controls = Spirv::GetHostFloatControls();
