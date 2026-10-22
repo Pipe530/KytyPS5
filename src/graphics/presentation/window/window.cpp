@@ -472,6 +472,20 @@ void WindowContext::ProcessEvent(double time_s) {
 					Controller::CycleKeyboardPlayer();
 				}
 				return;
+			case SDLK_F9:
+				if (pressed && !event->key.repeat) {
+					Config::SetFsrEnabled(!Config::FsrEnabled());
+				}
+				return;
+			case SDLK_F10:
+				if (pressed && !event->key.repeat) {
+					// Cycle: off -> FXAA -> SMAA -> off.
+					const bool fxaa = Config::FxaaEnabled() && !Config::SmaaEnabled();
+					const bool smaa = Config::SmaaEnabled();
+					Config::SetFxaaEnabled(!fxaa && !smaa);
+					Config::SetSmaaEnabled(fxaa);
+				}
+				return;
 #if defined(__APPLE__)
 			case SDLK_P:
 				if ((event->key.mod & SDL_KMOD_GUI) == 0) {

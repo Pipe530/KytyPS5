@@ -284,6 +284,12 @@ void ConfigurationEditDialog::Init(const Configuration& info) {
 	                                                                            : 0);
 	m_ui->checkBox_fullscreen->setChecked(info.fullscreen_enabled);
 	m_ui->checkBox_hdr->setChecked(info.hdr_enabled);
+	m_ui->checkBox_fsr->setChecked(info.fsr_enabled);
+	m_ui->doubleSpinBox_mip_lod_bias_offset->setValue(info.mip_lod_bias_offset);
+	m_ui->doubleSpinBox_render_scale->setValue(info.render_scale);
+	m_ui->checkBox_fxaa->setChecked(info.fxaa_enabled);
+	m_ui->checkBox_smaa->setChecked(info.smaa_enabled);
+	m_ui->doubleSpinBox_fsr_sharpness->setValue(info.fsr_sharpness);
 	m_ui->checkBox_hide_cursor->setChecked(info.hide_cursor_enabled);
 	m_ui->checkBox_readback->setChecked(info.readback_linear_images);
 	m_ui->checkBox_readback_tiled->setChecked(info.readback_tiled_images);
@@ -478,6 +484,12 @@ static void UpdateInfo(Configuration& info, Ui::ConfigurationEditDialog& ui, boo
 	info.gpu_index                 = ui.comboBox_gpu->currentIndex() - 1;
 	info.fullscreen_enabled        = ui.checkBox_fullscreen->isChecked();
 	info.hdr_enabled               = ui.checkBox_hdr->isChecked();
+	info.fsr_enabled               = ui.checkBox_fsr->isChecked();
+	info.mip_lod_bias_offset = static_cast<float>(ui.doubleSpinBox_mip_lod_bias_offset->value());
+	info.render_scale        = static_cast<float>(ui.doubleSpinBox_render_scale->value());
+	info.fxaa_enabled        = ui.checkBox_fxaa->isChecked();
+	info.smaa_enabled        = ui.checkBox_smaa->isChecked();
+	info.fsr_sharpness       = static_cast<float>(ui.doubleSpinBox_fsr_sharpness->value());
 	info.hide_cursor_enabled       = ui.checkBox_hide_cursor->isChecked();
 	info.readback_linear_images    = ui.checkBox_readback->isChecked();
 	info.readback_tiled_images     = ui.checkBox_readback_tiled->isChecked();

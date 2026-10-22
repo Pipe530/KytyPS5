@@ -170,7 +170,8 @@ bool RenderExecutor::TryConsumeComputeFill(const ShaderComputeInputInfo& input,
 		std::scoped_lock lock {cache.m_lock};
 		const auto&      image = cache.GetImage(binding.image_id);
 		const auto&      view  = binding.desc.view_info;
-		if (image.backing.format != vk::Format::eD32SfloatS8Uint || image.info.samples != 1 ||
+		if (image.IsScaled() || image.backing.format != vk::Format::eD32SfloatS8Uint ||
+		    image.info.samples != 1 ||
 		    image.info.stencil != destination || view.base_level >= image.backing.mip_levels ||
 		    view.base_layer >= image.backing.layers || view.layer_count != extents[2] ||
 		    view.layer_count > image.backing.layers - view.base_layer ||
@@ -354,6 +355,16 @@ void RenderExecutor::DispatchDirect(uint64_t submit_id, CommandBuffer& buffer,
 	    m_context.GetPipelineCache().GetComputePipeline(input_info, compute_program);
 	auto& bindings = m_compute_bindings;
 	PrepareBindings(input_info.stage, bindings);
+	if (Config::GetRenderScale() < 1.0f && program.info.uses_image_fetch) {
+		static std::atomic<uint32_t> fetch_log {0};
+		for (const auto& image_binding: bindings.images) {
+			if (image_binding.image_id && m_context.GetTextureCache().GetImage(image_binding.image_id).IsScaled() &&
+			    fetch_log.fetch_add(1, std::memory_order_relaxed) < 40) {
+				LOGF("RenderScale: compute shader hash=0x%016" PRIx64 " fetches scaled image\n",
+				     program.shader_hash);
+			}
+		}
+	}
 	if (program.bindings.dispatch_thread_dword != ShaderRecompiler::IR::PushData::NoStart) {
 		std::copy(std::begin(input_info.dispatch_threads_num), std::end(input_info.dispatch_threads_num),
 		          bindings.shader_data.begin() + program.bindings.dispatch_thread_dword);

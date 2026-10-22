@@ -277,6 +277,12 @@ static QStringList CreateEmulatorArgs(const Configuration& info) {
 	}
 	AddFlag(args, info.fullscreen_enabled, "--fullscreen");
 	AddFlag(args, info.hdr_enabled, "--hdr");
+	AddFlag(args, info.fsr_enabled, "--fsr");
+	args << "--mip-lod-bias-offset" << QString::number(info.mip_lod_bias_offset, 'f', 2);
+	args << "--render-scale" << QString::number(info.render_scale, 'f', 2);
+	AddFlag(args, info.fxaa_enabled, "--fxaa");
+	AddFlag(args, info.smaa_enabled, "--smaa");
+	args << "--fsr-sharpness" << QString::number(info.fsr_sharpness, 'f', 2);
 	AddFlag(args, info.hide_cursor_enabled, "--hide-cursor");
 	AddFlag(args, info.readback_linear_images, "--readback-linear-images");
 	AddFlag(args, info.readback_tiled_images, "--readback-tiled-images");

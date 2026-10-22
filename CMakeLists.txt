@@ -324,6 +324,12 @@ add_gpu_blit_shader(gpu_blit_fs_triangle gpu_blit_fs_triangle.vert)
 add_gpu_blit_shader(gpu_blit_color_to_ms_depth gpu_blit_color_to_ms_depth.frag)
 add_gpu_blit_shader(gpu_video_out_overlay gpu_video_out_overlay.frag)
 add_gpu_blit_shader(gpu_imgui_hdr gpu_video_out_overlay.frag -DIMGUI_HDR=1)
+add_gpu_blit_shader(gpu_fsr_easu gpu_fsr_easu.frag)
+add_gpu_blit_shader(gpu_fsr_rcas gpu_fsr_rcas.frag)
+add_gpu_blit_shader(gpu_fxaa gpu_fxaa.frag)
+add_gpu_blit_shader(gpu_smaa_edges gpu_smaa_edges.frag)
+add_gpu_blit_shader(gpu_smaa_weights gpu_smaa_weights.frag)
+add_gpu_blit_shader(gpu_smaa_blend gpu_smaa_blend.frag)
 list(APPEND kyty_emulator_src ${gpu_blit_shader_headers})
 
 list(APPEND kyty_emulator_src

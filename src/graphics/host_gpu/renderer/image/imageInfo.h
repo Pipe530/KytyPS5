@@ -86,8 +86,11 @@ struct ImageInfo {
 	// Nonzero for guest-linear and depth-plane transfers; tiled colors are mip-major.
 	uint64_t linear_slice_stride = 0;
 	uint32_t first_tail_level    = 16;
+	// Host backing is created at the configured render scale; guest extent is unchanged.
+	bool render_scaled = false;
 
-	void                                           UpdateSize();
+	[[nodiscard]] bool RenderScaleEligible() const;
+	void                                             UpdateSize();
 	[[nodiscard]] uint32_t                         DataAlignment() const;
 	[[nodiscard]] uint64_t                         LinearSize(uint32_t levels = 0) const;
 	[[nodiscard]] vk::Extent3D                     MipExtent(uint32_t level) const;

@@ -236,6 +236,7 @@ static TextureCache::ImageDesc MakeDepthTargetDesc(const CommandBuffer& buffer,
 	desc.info.bytes_per_block = bytes;
 	desc.info.samples         = samples;
 	desc.info.tile_mode       = Prospero::TileMode::kDepth;
+	desc.info.render_scaled   = desc.info.RenderScaleEligible();
 	desc.info.UpdateSize();
 	desc.info.metadata.range =
 	    has_htile ? GuestRange {z.htile_data_base_addr, htile_backing_size} : GuestRange {};
@@ -406,6 +407,10 @@ bool RenderExecutor::DepthStencilCopy(CommandBuffer& buffer) {
 		                         range.layer_count};
 		region.dstSubresource = region.srcSubresource;
 		region.extent = write_desc.info.extent;
+		if (source.IsScaled() || destination.IsScaled()) {
+			region.extent.width  = std::min(source.backing.extent.width, destination.backing.extent.width);
+			region.extent.height = std::min(source.backing.extent.height, destination.backing.extent.height);
+		}
 	}
 	command.copyImage(source.backing.image, vk::ImageLayout::eTransferSrcOptimal,
 	                  destination.backing.image, vk::ImageLayout::eTransferDstOptimal,

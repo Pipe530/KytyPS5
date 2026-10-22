@@ -543,6 +543,9 @@ void Visit(Program& program, ShaderStageInputInfo input_info, InputUsage& inputs
 			}
 			break;
 		case ValueOpcode::ImageQueryLod: info.compute_derivatives = true; break;
+		case ValueOpcode::ImageRead:
+		case ValueOpcode::ImageWrite:
+		case ValueOpcode::ImageQueryDimensions: info.uses_image_fetch = true; break;
 		case ValueOpcode::ImageGatherRaw:
 			info.image_gather_extended = true;
 			break;
@@ -570,6 +573,7 @@ void CollectShaderInfo(Program& program, ShaderStageInputInfo input_info) {
 	    info.subgroup_local_invocation_id = info.compute_derivatives = info.image_gather_extended =
 	    info.function_lds = info.function_scratch = info.pixel_valid_mask = info.buffer_int64_atomics =
 	    info.buffer_u8 = info.buffer_u16 = info.shared_int64_atomics = info.coherent_buffers = info.float64 = false;
+	info.uses_image_fetch = false;
 	InputUsage inputs;
 	for (const auto* block: program.blocks) {
 		for (const auto& inst: *block) {

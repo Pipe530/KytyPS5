@@ -194,7 +194,8 @@ void ValidateNativeProgram(const IR::Program& program, bool lds_storage) {
 	     !IR::PushData::CanFit(program.bindings.push_data_start_dword, shader_data_dwords)) ||
 	    (has_dispatch_threads && (program.stage != ShaderType::Compute ||
 	                              program.bindings.dispatch_thread_dword != registers.size())) ||
-	    program.bindings.memory_offset_dword != registers.size() + (has_dispatch_threads ? 3u : 0u) ||
+	    program.bindings.memory_offset_dword !=
+	        registers.size() + (has_dispatch_threads ? 3u : 0u) + program.bindings.render_scale_count ||
 	    !std::is_sorted(registers.begin(), registers.end()) ||
 	    std::adjacent_find(registers.begin(), registers.end()) != registers.end()) {
 		Fail(program, "native shader-data layout is inconsistent");

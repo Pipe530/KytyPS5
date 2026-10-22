@@ -4,6 +4,8 @@
 #include "common/debugCounters.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstring>
 #include <memory>
 
 namespace Config {
@@ -87,6 +89,45 @@ bool IsGuestUserId(int32_t user_id) {
 
 PresentMode GetPresentMode() {
 	return g_config->present_mode;
+}
+
+float GetMipLodBiasOffset() {
+	const float value = g_config->mip_lod_bias_offset;
+	return std::isfinite(value) ? std::clamp(value, 0.0f, MAX_MIP_LOD_BIAS_OFFSET) : 0.0f;
+}
+
+float GetRenderScale() {
+	const float value = g_config->render_scale;
+	return std::isfinite(value) ? std::clamp(value, MIN_RENDER_SCALE, 1.0f) : 1.0f;
+}
+
+bool FsrEnabled() {
+	return g_config->fsr_enabled;
+}
+
+void SetFsrEnabled(bool enabled) {
+	g_config->fsr_enabled = enabled;
+}
+
+float GetFsrSharpness() {
+	const float value = g_config->fsr_sharpness;
+	return std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 0.9f;
+}
+
+bool FxaaEnabled() {
+	return g_config->fxaa_enabled;
+}
+
+void SetFxaaEnabled(bool enabled) {
+	g_config->fxaa_enabled = enabled;
+}
+
+bool SmaaEnabled() {
+	return g_config->smaa_enabled;
+}
+
+void SetSmaaEnabled(bool enabled) {
+	g_config->smaa_enabled = enabled;
 }
 
 int32_t GetGpuIndex() {

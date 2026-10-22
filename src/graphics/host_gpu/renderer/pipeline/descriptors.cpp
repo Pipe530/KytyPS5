@@ -30,6 +30,7 @@
 #include "graphics/shader/shader.h"
 #include "kernel/memory.h"
 
+#include <bit>
 #include <algorithm>
 #include <atomic>
 #include <bit>
@@ -700,6 +701,21 @@ void RenderExecutor::PrepareBindings(const ShaderStageRuntime& runtime,
 		prepared.shader_data.push_back(snapshot.user_data[reg - program.user_data_base]);
 	}
 	prepared.shader_data.resize(program.bindings.ShaderDataDwords());
+	if (program.bindings.render_scale_dword != ShaderRecompiler::IR::PushData::NoStart) {
+		for (uint32_t i = 0; i < program.bindings.render_scale_count; i++) {
+			float ratio = 1.0f;
+			const auto id = prepared.images[i].image_id;
+			if (id) {
+				const auto& image = m_context.GetTextureCache().GetImage(id);
+				if (image.IsScaled() && image.info.extent.width != 0) {
+					ratio = static_cast<float>(image.backing.extent.width) /
+					        static_cast<float>(image.info.extent.width);
+				}
+			}
+			prepared.shader_data[program.bindings.render_scale_dword + i] =
+			    std::bit_cast<uint32_t>(ratio);
+		}
+	}
 	if (program.bindings.descriptor_counts[static_cast<size_t>(BindingKind::Gds)] != 0) {
 		prepared.gds.buffer = m_context.GetBufferCache().GetGdsBuffer()->Handle();
 	}

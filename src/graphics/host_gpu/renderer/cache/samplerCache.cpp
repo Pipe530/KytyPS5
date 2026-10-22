@@ -1,6 +1,7 @@
 #include "graphics/host_gpu/renderer/cache/samplerCache.h"
 
 #include "common/assert.h"
+#include "common/emulatorConfig.h"
 #include "common/logging/log.h"
 #include "graphics/guest_gpu/gpu_defs.h"
 #include "graphics/host_gpu/renderer/renderContext.h"
@@ -17,7 +18,12 @@ SamplerCache::~SamplerCache() {
 vk::Sampler SamplerCache::GetSampler(const ShaderSamplerResource& r, bool integer_border) {
 	Common::LockGuard lock(m_mutex);
 
-	const SamplerKey key {r.fields[0], r.fields[1], r.fields[2], r.fields[3], integer_border};
+	const float lod_bias_offset = Config::GetMipLodBiasOffset();
+	uint32_t    lod_bias_bits   = 0;
+	std::memcpy(&lod_bias_bits, &lod_bias_offset, sizeof(lod_bias_bits));
+
+	const SamplerKey key {r.fields[0], r.fields[1], r.fields[2], r.fields[3], integer_border,
+	                      lod_bias_bits};
 	if (auto iter = m_samplers.find(key); iter != m_samplers.end()) {
 		return iter->second;
 	}
@@ -124,10 +130,9 @@ vk::Sampler SamplerCache::GetSampler(const ShaderSamplerResource& r, bool intege
 	sampler_info.addressModeV = to_vk_address_mode(r.ClampY());
 	sampler_info.addressModeW = to_vk_address_mode(r.ClampZ());
     const auto max_lod_bias = m_graphics.GetPhysicalDeviceProperties().limits.maxSamplerLodBias;
-    sampler_info.mipLodBias = std::clamp(
-        static_cast<float>(static_cast<int16_t>((r.LodBias() ^ 0x2000u) - 0x2000u)) / 256.0f,
-        -max_lod_bias, max_lod_bias
-    );
+	const float original_bias =
+	    static_cast<float>(static_cast<int16_t>((r.LodBias() ^ 0x2000u) - 0x2000u)) / 256.0f;
+	sampler_info.mipLodBias = std::clamp(original_bias + lod_bias_offset, -max_lod_bias, max_lod_bias);
 	sampler_info.anisotropyEnable        = (aniso ? VK_TRUE : VK_FALSE);
 	sampler_info.maxAnisotropy           = aniso_ratio;
 	sampler_info.compareEnable           = (r.DepthCompareFunc() != 0 ? VK_TRUE : VK_FALSE);

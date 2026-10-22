@@ -493,6 +493,9 @@ void TextureCache::RefreshCopySource(ImageId id) {
 }
 
 bool TextureCache::CopyD16(Image& destination, Image& source) {
+	if (source.IsScaled() || destination.IsScaled()) {
+		return true;
+	}
 	const bool source_depth      = source.info.IsDepth();
 	const bool destination_depth = destination.info.IsDepth();
 	if (source_depth == destination_depth) {
@@ -592,6 +595,17 @@ void TextureCache::CopyImage(ImageId destination_id, ImageId source_id) {
 	    (source.backing.format == destination.backing.format ||
 	     (!source_depth && !dest_depth &&
 	      vk::blockSize(source.backing.format) == vk::blockSize(destination.backing.format)));
+	if (source.IsScaled() || destination.IsScaled()) {
+		static int logged = 0;
+		if (logged++ < 12) {
+			LOGF("RenderScale: copy src info=%ux%u backing=%ux%u -> dst info=%ux%u backing=%ux%u "
+			     "direct=%d\n",
+			     source.info.extent.width, source.info.extent.height, source.backing.extent.width,
+			     source.backing.extent.height, destination.info.extent.width,
+			     destination.info.extent.height, destination.backing.extent.width,
+			     destination.backing.extent.height, direct_copy ? 1 : 0);
+		}
+	}
 	if (direct_copy) {
 		destination.CopyImage(source);
 	} else if (!CopyD16(destination, source)) {
@@ -929,7 +943,7 @@ ImageId TextureCache::ExpandImage(const ImageInfo& info, ImageId source_id) {
 
 bool TextureCache::CanDownload(const Image& image) const {
 	const auto& info = image.info;
-	if (info.samples != 1 || image.backing.samples != 1 || info.resources.layers == 0 ||
+	if (image.IsScaled() || info.samples != 1 || image.backing.samples != 1 || info.resources.layers == 0 ||
 	    info.data.size % info.resources.layers != 0) {
 		return false;
 	}
@@ -944,6 +958,9 @@ bool TextureCache::CanDownload(const Image& image) const {
 
 void TextureCache::UploadImage(Image& image, Buffer& source, uint64_t source_offset) {
 	auto& destination = image.depth_id ? m_slot_images[image.depth_id] : image;
+	if (destination.IsScaled()) {
+		return;
+	}
 	const auto& info        = image.info;
 	const auto  binding     = image.depth_id ? BindingType::DepthTarget : UploadBinding(image);
 	if (binding != BindingType::DepthTarget) {
@@ -1259,6 +1276,12 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_format) {
 			if (exact_format && resolved.info.pixel_format != desc.info.pixel_format) {
 				result = {};
 			} else if (resolved.info.resources < desc.info.resources) {
+				FreeImage(result);
+				result = {};
+			} else if ((desc.type == BindingType::RenderTarget ||
+			            desc.type == BindingType::DepthTarget) &&
+			           desc.info.render_scaled != resolved.IsScaled()) {
+				// A target must have the same scale as the viewport math assumes.
 				FreeImage(result);
 				result = {};
 			}
@@ -1590,9 +1613,9 @@ void TextureCache::ClearImage(CommandBuffer& command, ImageId id, vk::Format for
 		attachment.storeOp     = vk::AttachmentStoreOp::eStore;
 		attachment.clearValue  = clear;
 		vk::RenderingInfo rendering {};
-		rendering.renderArea.extent = {
-		    std::max(image.info.extent.width >> range.baseMipLevel, 1u),
-		    std::max(image.info.extent.height >> range.baseMipLevel, 1u)};
+		const auto area_extent = image.IsScaled() ? image.backing.extent : image.info.extent;
+		rendering.renderArea.extent = {std::max(area_extent.width >> range.baseMipLevel, 1u),
+		                               std::max(area_extent.height >> range.baseMipLevel, 1u)};
 		rendering.layerCount           = range.layerCount;
 		rendering.colorAttachmentCount = 1;
 		rendering.pColorAttachments    = &attachment;

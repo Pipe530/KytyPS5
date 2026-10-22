@@ -6,6 +6,12 @@
 #include "common/profiler.h"
 #include "common/threads.h"
 #include "gpu_blit_shaders/gpu_blit_fs_triangle_spv.h"
+#include "gpu_blit_shaders/gpu_fsr_easu_spv.h"
+#include "gpu_blit_shaders/gpu_fsr_rcas_spv.h"
+#include "gpu_blit_shaders/gpu_fxaa_spv.h"
+#include "gpu_blit_shaders/gpu_smaa_blend_spv.h"
+#include "gpu_blit_shaders/gpu_smaa_edges_spv.h"
+#include "gpu_blit_shaders/gpu_smaa_weights_spv.h"
 #include "gpu_blit_shaders/gpu_video_out_overlay_spv.h"
 #include "graphics/host_gpu/graphicContext.h"
 #include "graphics/host_gpu/renderer/render.h"
@@ -17,10 +23,14 @@
 #include "graphics/presentation/systemOverlay.h"
 #include "graphics/presentation/videoOut.h"
 #include "graphics/presentation/window/windowInternal.h"
+#include "graphics/presentation/window/smaa/AreaTex.h"
+#include "graphics/presentation/window/smaa/SearchTex.h"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <vector>
@@ -291,7 +301,21 @@ private:
 	vk::SurfaceFormatKHR SelectFormat();
 	void Destroy();
 	void DrawOverlay(vk::CommandBuffer command, const Presenter::Layer& layer);
-
+	[[nodiscard]] bool UseFsr(const Presenter::Frame* source) const;
+	void EnsureFsrResources();
+	void EnsureFxaaImage(vk::Extent2D extent);
+	struct SmaaImage {
+		VulkanImage   image {};
+		vk::ImageView view = nullptr;
+	};
+	void CreateSmaaImage(SmaaImage& out, vk::Format format, vk::Extent2D extent,
+	                     vk::ImageUsageFlags usage);
+	void DestroySmaaImage(SmaaImage& image);
+	void EnsureSmaaTargets(vk::Extent2D extent);
+	void EnsureSmaaLookup();
+	void RecordSmaaLookupUpload(vk::CommandBuffer command);
+	void RecordFsr(vk::CommandBuffer command, Presenter::Frame& source, bool keep_attachment);
+	void DestroyFsr();
 	WindowContext&   m_window;
 	vk::SwapchainKHR m_handle = nullptr;
 	vk::Format       m_format = vk::Format::eUndefined;
@@ -311,6 +335,28 @@ private:
 	vk::PipelineLayout             m_overlay_layout      = nullptr;
 	vk::Pipeline                   m_overlay_pipeline    = nullptr;
 	vk::Sampler                    m_overlay_sampler     = nullptr;
+	vk::DescriptorSetLayout        m_fsr_descriptors     = nullptr;
+	vk::PipelineLayout             m_fsr_layout          = nullptr;
+	vk::Pipeline                   m_fsr_easu_pipeline   = nullptr;
+	vk::Pipeline                   m_fsr_rcas_pipeline   = nullptr;
+	vk::Pipeline                   m_fxaa_pipeline       = nullptr;
+	vk::Sampler                    m_fxaa_sampler        = nullptr;
+	VulkanImage                    m_fxaa_image {};
+	vk::ImageView                  m_fxaa_view           = nullptr;
+	vk::Extent2D                   m_fxaa_extent {};
+	vk::Pipeline                   m_smaa_edges_pipeline   = nullptr;
+	vk::Pipeline                   m_smaa_weights_pipeline = nullptr;
+	vk::Pipeline                   m_smaa_blend_pipeline   = nullptr;
+	SmaaImage                      m_smaa_edges {};
+	SmaaImage                      m_smaa_weights {};
+	vk::Extent2D                   m_smaa_extent {};
+	SmaaImage                      m_smaa_area {};
+	SmaaImage                      m_smaa_search {};
+	vk::Buffer                     m_smaa_staging            = nullptr;
+	VmaAllocation                  m_smaa_staging_allocation = nullptr;
+	bool                           m_smaa_lookup_uploaded    = false;	vk::Sampler                    m_fsr_sampler         = nullptr;
+	VulkanImage                    m_fsr_image {};
+	vk::ImageView                  m_fsr_view            = nullptr;
 	uint32_t                       m_image_index         = static_cast<uint32_t>(-1);
 	uint32_t                       m_frame_index         = 0;
 };
@@ -546,6 +592,7 @@ void Swapchain::Destroy() {
 	m_overlay_layout      = nullptr;
 	m_overlay_descriptors = nullptr;
 	m_overlay_sampler     = nullptr;
+	DestroyFsr();
 
 	for (const auto semaphore: m_image_acquired) {
 		if (semaphore != nullptr) {
@@ -766,13 +813,543 @@ void Swapchain::DrawOverlay(vk::CommandBuffer command, const Presenter::Layer& l
 	command.endRendering();
 }
 
+bool Swapchain::UseFsr(const Presenter::Frame* source) const {
+	if (!Config::FsrEnabled() || source == nullptr || source->blank) {
+		return false;
+	}
+	const auto extent = source->image.extent;
+	// FSR 1.0 only upscales; linear float sources are not in the perceptual space it expects.
+	if (source->image.format == vk::Format::eR16G16B16A16Sfloat && !source->hdr) {
+		return false;
+	}
+	return extent.width <= m_extent.width && extent.height <= m_extent.height &&
+	       (extent.width < m_extent.width || extent.height < m_extent.height);
+}
+
+void Swapchain::DestroyFsr() {
+	auto& graphics = m_window.graphic_ctx;
+	auto  device   = graphics.device;
+	device.destroyPipeline(m_fxaa_pipeline, nullptr);
+	device.destroyPipeline(m_smaa_edges_pipeline, nullptr);
+	device.destroyPipeline(m_smaa_weights_pipeline, nullptr);
+	device.destroyPipeline(m_smaa_blend_pipeline, nullptr);
+	m_smaa_edges_pipeline   = nullptr;
+	m_smaa_weights_pipeline = nullptr;
+	m_smaa_blend_pipeline   = nullptr;
+	DestroySmaaImage(m_smaa_edges);
+	DestroySmaaImage(m_smaa_weights);
+	DestroySmaaImage(m_smaa_area);
+	DestroySmaaImage(m_smaa_search);
+	m_smaa_extent = vk::Extent2D {};
+	if (m_smaa_staging != nullptr) {
+		vmaDestroyBuffer(graphics.allocator, static_cast<VkBuffer>(m_smaa_staging),
+		                 m_smaa_staging_allocation);
+		m_smaa_staging            = nullptr;
+		m_smaa_staging_allocation = nullptr;
+	}
+	m_smaa_lookup_uploaded = false;
+	device.destroyPipeline(m_fxaa_pipeline, nullptr);
+	device.destroySampler(m_fxaa_sampler, nullptr);
+	device.destroyImageView(m_fxaa_view, nullptr);
+	if (m_fxaa_image.image != nullptr) {
+		graphics.DeleteImage(m_fxaa_image);
+	}
+	m_fxaa_pipeline = nullptr;
+	m_fxaa_sampler  = nullptr;
+	m_fxaa_view     = nullptr;
+	m_fxaa_extent   = vk::Extent2D {};
+	device.destroyPipeline(m_fsr_easu_pipeline, nullptr);
+	device.destroyPipeline(m_fsr_rcas_pipeline, nullptr);
+	device.destroyPipelineLayout(m_fsr_layout, nullptr);
+	device.destroyDescriptorSetLayout(m_fsr_descriptors, nullptr);
+	device.destroySampler(m_fsr_sampler, nullptr);
+	device.destroyImageView(m_fsr_view, nullptr);
+	if (m_fsr_image.image != nullptr) {
+		graphics.DeleteImage(m_fsr_image);
+	}
+	m_fsr_easu_pipeline = nullptr;
+	m_fsr_rcas_pipeline = nullptr;
+	m_fsr_layout        = nullptr;
+	m_fsr_descriptors   = nullptr;
+	m_fsr_sampler       = nullptr;
+	m_fsr_view          = nullptr;
+}
+
+void Swapchain::EnsureFsrResources() {
+	if (m_fsr_easu_pipeline != nullptr) {
+		return;
+	}
+	auto& graphics = m_window.graphic_ctx;
+	auto  device   = graphics.device;
+
+	constexpr auto fsr_format = vk::Format::eR16G16B16A16Sfloat;
+	vk::ImageCreateInfo create_image {};
+	create_image.imageType     = vk::ImageType::e2D;
+	create_image.extent        = {m_extent.width, m_extent.height, 1};
+	create_image.mipLevels     = 1;
+	create_image.arrayLayers   = 1;
+	create_image.format        = fsr_format;
+	create_image.tiling        = vk::ImageTiling::eOptimal;
+	create_image.initialLayout = vk::ImageLayout::eUndefined;
+	create_image.usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled;
+	create_image.sharingMode = vk::SharingMode::eExclusive;
+	create_image.samples     = vk::SampleCountFlagBits::e1;
+	if (!graphics.CreateImage(create_image, m_fsr_image)) {
+		EXIT("failed to allocate FSR intermediate image, extent=%ux%u\n", m_extent.width,
+		     m_extent.height);
+	}
+	vk::ImageViewCreateInfo view {};
+	view.image            = m_fsr_image.image;
+	view.viewType         = vk::ImageViewType::e2D;
+	view.format           = fsr_format;
+	view.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+	RequireVulkanSuccess(device.createImageView(&view, nullptr, &m_fsr_view),
+	                     "create FSR intermediate image view");
+
+	vk::SamplerCreateInfo sampler {};
+	sampler.magFilter    = vk::Filter::eNearest;
+	sampler.minFilter    = vk::Filter::eNearest;
+	sampler.addressModeU = vk::SamplerAddressMode::eClampToEdge;
+	sampler.addressModeV = vk::SamplerAddressMode::eClampToEdge;
+	sampler.addressModeW = vk::SamplerAddressMode::eClampToEdge;
+	RequireVulkanSuccess(device.createSampler(&sampler, nullptr, &m_fsr_sampler),
+	                     "create FSR sampler");
+	const std::array<vk::DescriptorSetLayoutBinding, 3> bindings {{
+	    {0, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
+	    {1, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
+	    {2, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
+	}};
+	vk::DescriptorSetLayoutCreateInfo descriptors {};
+	descriptors.flags        = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR;
+	descriptors.bindingCount = static_cast<uint32_t>(bindings.size());
+	descriptors.pBindings    = bindings.data();
+	RequireVulkanSuccess(device.createDescriptorSetLayout(&descriptors, nullptr, &m_fsr_descriptors),
+	                     "create FSR descriptor layout");
+	const vk::PushConstantRange params {vk::ShaderStageFlagBits::eFragment, 0, 5 * sizeof(float)};
+	vk::PipelineLayoutCreateInfo layout {};
+	layout.setLayoutCount         = 1;
+	layout.pSetLayouts            = &m_fsr_descriptors;
+	layout.pushConstantRangeCount = 1;
+	layout.pPushConstantRanges    = &params;
+	RequireVulkanSuccess(device.createPipelineLayout(&layout, nullptr, &m_fsr_layout),
+	                     "create FSR pipeline layout");
+
+	const auto vertex = CompileSPV(GPU_BLIT_FS_TRIANGLE_SPV, device);
+	auto make_pipeline = [&](const auto& fragment_spv, vk::Format target, vk::Pipeline& out) {
+		const auto fragment = CompileSPV(fragment_spv, device);
+		std::array<vk::PipelineShaderStageCreateInfo, 2> stages {};
+		stages[0].stage  = vk::ShaderStageFlagBits::eVertex;
+		stages[0].module = vertex;
+		stages[0].pName  = "main";
+		stages[1].stage  = vk::ShaderStageFlagBits::eFragment;
+		stages[1].module = fragment;
+		stages[1].pName  = "main";
+		vk::PipelineVertexInputStateCreateInfo   vertex_input {};
+		vk::PipelineInputAssemblyStateCreateInfo assembly {};
+		assembly.topology = vk::PrimitiveTopology::eTriangleList;
+		vk::PipelineViewportStateCreateInfo viewport {};
+		viewport.viewportCount = 1;
+		viewport.scissorCount  = 1;
+		vk::PipelineRasterizationStateCreateInfo rasterization {};
+		rasterization.lineWidth = 1.0f;
+		vk::PipelineMultisampleStateCreateInfo multisample {};
+		multisample.rasterizationSamples = vk::SampleCountFlagBits::e1;
+		vk::PipelineColorBlendAttachmentState attachment {};
+		attachment.colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+		                            vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
+		vk::PipelineColorBlendStateCreateInfo blend {};
+		blend.attachmentCount = 1;
+		blend.pAttachments    = &attachment;
+		const std::array dynamic_states {vk::DynamicState::eViewport, vk::DynamicState::eScissor};
+		vk::PipelineDynamicStateCreateInfo dynamic {};
+		dynamic.dynamicStateCount = static_cast<uint32_t>(dynamic_states.size());
+		dynamic.pDynamicStates    = dynamic_states.data();
+		vk::PipelineRenderingCreateInfo rendering {};
+		rendering.colorAttachmentCount    = 1;
+		rendering.pColorAttachmentFormats = &target;
+		vk::GraphicsPipelineCreateInfo create {};
+		create.pNext               = &rendering;
+		create.stageCount          = static_cast<uint32_t>(stages.size());
+		create.pStages             = stages.data();
+		create.pVertexInputState   = &vertex_input;
+		create.pInputAssemblyState = &assembly;
+		create.pViewportState      = &viewport;
+		create.pRasterizationState = &rasterization;
+		create.pMultisampleState   = &multisample;
+		create.pColorBlendState    = &blend;
+		create.pDynamicState       = &dynamic;
+		create.layout              = m_fsr_layout;
+		RequireVulkanSuccess(device.createGraphicsPipelines(nullptr, 1, &create, nullptr, &out),
+		                     "create FSR pipeline");
+		device.destroyShaderModule(fragment, nullptr);
+	};
+	make_pipeline(GPU_FSR_RCAS_SPV, m_format, m_fsr_rcas_pipeline);
+	make_pipeline(GPU_FSR_EASU_SPV, fsr_format, m_fsr_easu_pipeline);
+	make_pipeline(GPU_FXAA_SPV, fsr_format, m_fxaa_pipeline);
+	make_pipeline(GPU_SMAA_EDGES_SPV, vk::Format::eR8G8Unorm, m_smaa_edges_pipeline);
+	make_pipeline(GPU_SMAA_WEIGHTS_SPV, vk::Format::eR8G8B8A8Unorm, m_smaa_weights_pipeline);
+	make_pipeline(GPU_SMAA_BLEND_SPV, fsr_format, m_smaa_blend_pipeline);
+	device.destroyShaderModule(vertex, nullptr);
+
+	vk::SamplerCreateInfo linear = sampler;
+	linear.magFilter             = vk::Filter::eLinear;
+	linear.minFilter             = vk::Filter::eLinear;
+	RequireVulkanSuccess(device.createSampler(&linear, nullptr, &m_fxaa_sampler),
+	                     "create FXAA sampler");
+}
+
+void Swapchain::EnsureFxaaImage(vk::Extent2D extent) {
+	if (m_fxaa_image.image != nullptr && m_fxaa_extent == extent) {
+		return;
+	}
+	auto& graphics = m_window.graphic_ctx;
+	auto  device   = graphics.device;
+	if (m_fxaa_image.image != nullptr) {
+		device.waitIdle();
+		device.destroyImageView(m_fxaa_view, nullptr);
+		m_fxaa_view = nullptr;
+		graphics.DeleteImage(m_fxaa_image);
+	}
+	vk::ImageCreateInfo create_image {};
+	create_image.imageType     = vk::ImageType::e2D;
+	create_image.extent        = {extent.width, extent.height, 1};
+	create_image.mipLevels     = 1;
+	create_image.arrayLayers   = 1;
+	create_image.format        = vk::Format::eR16G16B16A16Sfloat;
+	create_image.tiling        = vk::ImageTiling::eOptimal;
+	create_image.initialLayout = vk::ImageLayout::eUndefined;
+	create_image.usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled;
+	create_image.sharingMode = vk::SharingMode::eExclusive;
+	create_image.samples     = vk::SampleCountFlagBits::e1;
+	if (!graphics.CreateImage(create_image, m_fxaa_image)) {
+		EXIT("failed to allocate FXAA image, extent=%ux%u\n", extent.width, extent.height);
+	}
+	vk::ImageViewCreateInfo view {};
+	view.image            = m_fxaa_image.image;
+	view.viewType         = vk::ImageViewType::e2D;
+	view.format           = vk::Format::eR16G16B16A16Sfloat;
+	view.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+	RequireVulkanSuccess(device.createImageView(&view, nullptr, &m_fxaa_view),
+	                     "create FXAA image view");
+	m_fxaa_extent = extent;
+}
+
+void Swapchain::CreateSmaaImage(SmaaImage& out, vk::Format format, vk::Extent2D extent,
+                                vk::ImageUsageFlags usage) {
+	auto& graphics = m_window.graphic_ctx;
+	vk::ImageCreateInfo create_image {};
+	create_image.imageType     = vk::ImageType::e2D;
+	create_image.extent        = {extent.width, extent.height, 1};
+	create_image.mipLevels     = 1;
+	create_image.arrayLayers   = 1;
+	create_image.format        = format;
+	create_image.tiling        = vk::ImageTiling::eOptimal;
+	create_image.initialLayout = vk::ImageLayout::eUndefined;
+	create_image.usage         = usage | vk::ImageUsageFlagBits::eSampled;
+	create_image.sharingMode   = vk::SharingMode::eExclusive;
+	create_image.samples       = vk::SampleCountFlagBits::e1;
+	if (!graphics.CreateImage(create_image, out.image)) {
+		EXIT("failed to allocate SMAA image, extent=%ux%u\n", extent.width, extent.height);
+	}
+	vk::ImageViewCreateInfo view {};
+	view.image            = out.image.image;
+	view.viewType         = vk::ImageViewType::e2D;
+	view.format           = format;
+	view.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+	RequireVulkanSuccess(graphics.device.createImageView(&view, nullptr, &out.view),
+	                     "create SMAA image view");
+}
+
+void Swapchain::DestroySmaaImage(SmaaImage& image) {
+	auto& graphics = m_window.graphic_ctx;
+	graphics.device.destroyImageView(image.view, nullptr);
+	image.view = nullptr;
+	if (image.image.image != nullptr) {
+		graphics.DeleteImage(image.image);
+	}
+}
+
+void Swapchain::EnsureSmaaTargets(vk::Extent2D extent) {
+	if (m_smaa_edges.image.image != nullptr && m_smaa_extent == extent) {
+		return;
+	}
+	if (m_smaa_edges.image.image != nullptr) {
+		m_window.graphic_ctx.device.waitIdle();
+		DestroySmaaImage(m_smaa_edges);
+		DestroySmaaImage(m_smaa_weights);
+	}
+	constexpr auto usage = vk::ImageUsageFlagBits::eColorAttachment;
+	CreateSmaaImage(m_smaa_edges, vk::Format::eR8G8Unorm, extent, usage);
+	CreateSmaaImage(m_smaa_weights, vk::Format::eR8G8B8A8Unorm, extent, usage);
+	m_smaa_extent = extent;
+}
+
+void Swapchain::EnsureSmaaLookup() {
+	if (m_smaa_staging != nullptr) {
+		return;
+	}
+	auto& graphics = m_window.graphic_ctx;
+	CreateSmaaImage(m_smaa_area, vk::Format::eR8G8Unorm, {AREATEX_WIDTH, AREATEX_HEIGHT},
+	                vk::ImageUsageFlagBits::eTransferDst);
+	CreateSmaaImage(m_smaa_search, vk::Format::eR8Unorm, {SEARCHTEX_WIDTH, SEARCHTEX_HEIGHT},
+	                vk::ImageUsageFlagBits::eTransferDst);
+
+	static_assert(sizeof(areaTexBytes) == AREATEX_SIZE);
+	static_assert(sizeof(searchTexBytes) == SEARCHTEX_SIZE);
+	vk::BufferCreateInfo buffer {};
+	buffer.size  = AREATEX_SIZE + SEARCHTEX_SIZE;
+	buffer.usage = vk::BufferUsageFlagBits::eTransferSrc;
+	VmaAllocationCreateInfo allocation {};
+	allocation.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+	allocation.flags =
+	    VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+	VmaAllocationInfo mapped {};
+	VkBuffer          handle = VK_NULL_HANDLE;
+	if (vmaCreateBuffer(graphics.allocator, static_cast<const VkBufferCreateInfo*>(buffer),
+	                    &allocation, &handle, &m_smaa_staging_allocation, &mapped) != VK_SUCCESS) {
+		EXIT("failed to allocate SMAA lookup upload buffer\n");
+	}
+	m_smaa_staging = vk::Buffer(handle);
+	auto* data     = static_cast<uint8_t*>(mapped.pMappedData);
+	std::memcpy(data, areaTexBytes, AREATEX_SIZE);
+	std::memcpy(data + AREATEX_SIZE, searchTexBytes, SEARCHTEX_SIZE);
+	RequireVulkanSuccess(static_cast<vk::Result>(vmaFlushAllocation(
+	                         graphics.allocator, m_smaa_staging_allocation, 0, VK_WHOLE_SIZE)),
+	                     "flush SMAA lookup upload");
+}
+
+void Swapchain::RecordSmaaLookupUpload(vk::CommandBuffer command) {
+	if (m_smaa_lookup_uploaded) {
+		return;
+	}
+	EnsureSmaaLookup();
+	constexpr vk::ImageSubresourceRange range {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+	auto transition = [&](vk::Image image, vk::PipelineStageFlags2 src_stage,
+	                      vk::AccessFlags2 src_access, vk::PipelineStageFlags2 dst_stage,
+	                      vk::AccessFlags2 dst_access, vk::ImageLayout old_layout,
+	                      vk::ImageLayout new_layout) {
+		vk::ImageMemoryBarrier2 b {};
+		b.srcStageMask        = src_stage;
+		b.srcAccessMask       = src_access;
+		b.dstStageMask        = dst_stage;
+		b.dstAccessMask       = dst_access;
+		b.oldLayout           = old_layout;
+		b.newLayout           = new_layout;
+		b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		b.image               = image;
+		b.subresourceRange    = range;
+		vk::DependencyInfo dependency {};
+		dependency.imageMemoryBarrierCount = 1;
+		dependency.pImageMemoryBarriers    = &b;
+		command.pipelineBarrier2(dependency);
+	};
+	auto upload = [&](SmaaImage& image, vk::DeviceSize offset) {
+		transition(image.image.image, vk::PipelineStageFlagBits2::eTopOfPipe, {},
+		           vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferWrite,
+		           vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
+		vk::BufferImageCopy copy {};
+		copy.bufferOffset     = offset;
+		copy.imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1};
+		copy.imageExtent      = image.image.extent;
+		command.copyBufferToImage(m_smaa_staging, image.image.image,
+		                          vk::ImageLayout::eTransferDstOptimal, 1, &copy);
+		transition(image.image.image, vk::PipelineStageFlagBits2::eTransfer,
+		           vk::AccessFlagBits2::eTransferWrite, vk::PipelineStageFlagBits2::eFragmentShader,
+		           vk::AccessFlagBits2::eShaderRead, vk::ImageLayout::eTransferDstOptimal,
+		           vk::ImageLayout::eShaderReadOnlyOptimal);
+	};
+	upload(m_smaa_area, 0);
+	upload(m_smaa_search, AREATEX_SIZE);
+	m_smaa_lookup_uploaded = true;
+}
+
+void Swapchain::RecordFsr(vk::CommandBuffer command, Presenter::Frame& source,
+                          bool keep_attachment) {
+	EnsureFsrResources();
+	auto device = m_window.graphic_ctx.device;
+
+	if (source.view == nullptr) {
+		vk::ImageViewCreateInfo view {};
+		view.image            = source.image.image;
+		view.viewType         = vk::ImageViewType::e2D;
+		view.format           = source.image.format;
+		view.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+		RequireVulkanSuccess(device.createImageView(&view, nullptr, &source.view),
+		                     "create FSR source image view");
+	}
+	source.Transit(command, vk::ImageLayout::eShaderReadOnlyOptimal,
+	               vk::AccessFlagBits2::eShaderRead);
+
+	constexpr vk::ImageSubresourceRange range {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+	auto barrier = [&](vk::Image image, vk::PipelineStageFlags2 src_stage,
+	                   vk::AccessFlags2 src_access, vk::PipelineStageFlags2 dst_stage,
+	                   vk::AccessFlags2 dst_access, vk::ImageLayout old_layout,
+	                   vk::ImageLayout new_layout) {
+		vk::ImageMemoryBarrier2 b {};
+		b.srcStageMask        = src_stage;
+		b.srcAccessMask       = src_access;
+		b.dstStageMask        = dst_stage;
+		b.dstAccessMask       = dst_access;
+		b.oldLayout           = old_layout;
+		b.newLayout           = new_layout;
+		b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		b.image               = image;
+		b.subresourceRange    = range;
+		vk::DependencyInfo dependency {};
+		dependency.imageMemoryBarrierCount = 1;
+		dependency.pImageMemoryBarriers    = &b;
+		command.pipelineBarrier2(dependency);
+	};
+
+	// The intermediate image is fully rewritten each frame. The swapchain barrier uses the
+	// transfer stage to chain after the acquire semaphore wait.
+	barrier(m_fsr_image.image, vk::PipelineStageFlagBits2::eFragmentShader, {},
+	        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+	        vk::AccessFlagBits2::eColorAttachmentWrite, vk::ImageLayout::eUndefined,
+	        vk::ImageLayout::eColorAttachmentOptimal);
+	barrier(m_images[m_image_index], vk::PipelineStageFlagBits2::eTransfer, {},
+	        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+	        vk::AccessFlagBits2::eColorAttachmentWrite, vk::ImageLayout::eUndefined,
+	        vk::ImageLayout::eColorAttachmentOptimal);
+
+	const bool use_smaa = Config::SmaaEnabled();
+	const bool use_fxaa = Config::FxaaEnabled() && !use_smaa;
+	if (use_smaa) {
+		RecordSmaaLookupUpload(command);
+		EnsureSmaaTargets({source.image.extent.width, source.image.extent.height});
+		for (auto* target : {&m_smaa_edges, &m_smaa_weights}) {
+			barrier(target->image.image, vk::PipelineStageFlagBits2::eFragmentShader, {},
+			        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+			        vk::AccessFlagBits2::eColorAttachmentWrite, vk::ImageLayout::eUndefined,
+			        vk::ImageLayout::eColorAttachmentOptimal);
+		}
+	}
+	if (use_fxaa || use_smaa) {
+		EnsureFxaaImage({source.image.extent.width, source.image.extent.height});
+		barrier(m_fxaa_image.image, vk::PipelineStageFlagBits2::eFragmentShader, {},
+		        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+		        vk::AccessFlagBits2::eColorAttachmentWrite, vk::ImageLayout::eUndefined,
+		        vk::ImageLayout::eColorAttachmentOptimal);
+	}
+
+	struct Params {
+		float in_size[2];
+		float out_size[2];
+		float sharpness;
+	};
+	// RCAS sharpness is configured in [0, 1]; map it to stops (0 stops = maximum, 2 = softest).
+	const float  rcas_stops = (1.0f - Config::GetFsrSharpness()) * 2.0f;
+	const Params fxaa {{static_cast<float>(source.image.extent.width),
+	                    static_cast<float>(source.image.extent.height)},
+	                   {static_cast<float>(source.image.extent.width),
+	                    static_cast<float>(source.image.extent.height)},
+	                   0.0f};
+	const Params easu {{static_cast<float>(source.image.extent.width),
+	                    static_cast<float>(source.image.extent.height)},
+	                   {static_cast<float>(m_extent.width), static_cast<float>(m_extent.height)},
+	                   0.0f};
+	const Params rcas {{static_cast<float>(m_extent.width), static_cast<float>(m_extent.height)},
+	                   {static_cast<float>(m_extent.width), static_cast<float>(m_extent.height)},
+	                   std::exp2(-rcas_stops)};
+
+	auto pass = [&](vk::Pipeline pipeline, std::initializer_list<vk::ImageView> inputs,
+	                vk::Sampler input_sampler, vk::ImageView target, vk::Extent2D extent,
+	                const Params& params) {
+		std::array<vk::DescriptorImageInfo, 3> images {};
+		std::array<vk::WriteDescriptorSet, 3>  writes {};
+		uint32_t                               count = 0;
+		for (const auto input : inputs) {
+			images[count] = {input_sampler, input, vk::ImageLayout::eShaderReadOnlyOptimal};
+			writes[count].dstBinding      = count;
+			writes[count].descriptorCount = 1;
+			writes[count].descriptorType  = vk::DescriptorType::eCombinedImageSampler;
+			writes[count].pImageInfo      = &images[count];
+			count++;
+		}
+		command.pushDescriptorSetKHR(vk::PipelineBindPoint::eGraphics, m_fsr_layout, 0, count,
+		                             writes.data());
+		command.pushConstants(m_fsr_layout, vk::ShaderStageFlagBits::eFragment, 0, sizeof(params),
+		                      &params);
+		command.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
+		vk::RenderingAttachmentInfo attachment {};
+		attachment.imageView   = target;
+		attachment.imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
+		attachment.loadOp      = vk::AttachmentLoadOp::eDontCare;
+		attachment.storeOp     = vk::AttachmentStoreOp::eStore;
+		vk::RenderingInfo rendering {};
+		rendering.renderArea.extent    = extent;
+		rendering.layerCount           = 1;
+		rendering.colorAttachmentCount = 1;
+		rendering.pColorAttachments    = &attachment;
+		command.beginRendering(&rendering);
+		const vk::Viewport viewport {0.0f, 0.0f, static_cast<float>(extent.width),
+		                             static_cast<float>(extent.height), 0.0f, 1.0f};
+		const vk::Rect2D   scissor {{0, 0}, extent};
+		command.setViewport(0, 1, &viewport);
+		command.setScissor(0, 1, &scissor);
+		command.draw(3, 1, 0, 0);
+		command.endRendering();
+	};
+
+	auto easu_input = source.view;
+	if (use_smaa) {
+		auto to_read = [&](vk::Image image) {
+			barrier(image, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+			        vk::AccessFlagBits2::eColorAttachmentWrite,
+			        vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead,
+			        vk::ImageLayout::eColorAttachmentOptimal,
+			        vk::ImageLayout::eShaderReadOnlyOptimal);
+		};
+		pass(m_smaa_edges_pipeline, {source.view}, m_fxaa_sampler, m_smaa_edges.view,
+		     m_smaa_extent, fxaa);
+		to_read(m_smaa_edges.image.image);
+		pass(m_smaa_weights_pipeline, {m_smaa_edges.view, m_smaa_area.view, m_smaa_search.view},
+		     m_fxaa_sampler, m_smaa_weights.view, m_smaa_extent, fxaa);
+		to_read(m_smaa_weights.image.image);
+		pass(m_smaa_blend_pipeline, {source.view, m_smaa_weights.view}, m_fxaa_sampler,
+		     m_fxaa_view, m_fxaa_extent, fxaa);
+		to_read(m_fxaa_image.image);
+		easu_input = m_fxaa_view;
+	} else if (use_fxaa) {
+		pass(m_fxaa_pipeline, {source.view}, m_fxaa_sampler, m_fxaa_view, m_fxaa_extent, fxaa);
+		barrier(m_fxaa_image.image, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+		        vk::AccessFlagBits2::eColorAttachmentWrite,
+		        vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead,
+		        vk::ImageLayout::eColorAttachmentOptimal,
+		        vk::ImageLayout::eShaderReadOnlyOptimal);
+		easu_input = m_fxaa_view;
+	}
+	pass(m_fsr_easu_pipeline, {easu_input}, m_fsr_sampler, m_fsr_view, m_extent, easu);
+	barrier(m_fsr_image.image, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+	        vk::AccessFlagBits2::eColorAttachmentWrite, vk::PipelineStageFlagBits2::eFragmentShader,
+	        vk::AccessFlagBits2::eShaderRead, vk::ImageLayout::eColorAttachmentOptimal,
+	        vk::ImageLayout::eShaderReadOnlyOptimal);
+	pass(m_fsr_rcas_pipeline, {m_fsr_view}, m_fsr_sampler, m_image_views[m_image_index], m_extent,
+	     rcas);
+
+	// Later overlay passes load the swapchain image; otherwise it goes straight to presentation.
+	barrier(m_images[m_image_index], vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+	        vk::AccessFlagBits2::eColorAttachmentWrite,
+	        keep_attachment ? vk::PipelineStageFlagBits2::eColorAttachmentOutput
+	                        : vk::PipelineStageFlagBits2::eAllCommands,
+	        keep_attachment ? vk::AccessFlagBits2::eColorAttachmentRead |
+	                              vk::AccessFlagBits2::eColorAttachmentWrite
+	                        : vk::AccessFlagBits2::eMemoryRead,
+	        vk::ImageLayout::eColorAttachmentOptimal,
+	        keep_attachment ? vk::ImageLayout::eColorAttachmentOptimal
+	                        : vk::ImageLayout::ePresentSrcKHR);
+}
+
 void Swapchain::RecordPresentCommands(CommandBuffer& command, Presenter::Frame* source,
                                       const Presenter::Layer& overlay, bool draw_system_overlay) {
 	EXIT_IF(m_image_index >= m_images.size());
 	auto       vk_command      = command.Handle();
 	const bool draw_overlay    = overlay.frame != nullptr;
 	const bool draw_attachment = draw_overlay || draw_system_overlay;
-	if (source != nullptr) {
+	const bool use_fsr         = UseFsr(source);
+	if (source != nullptr && !use_fsr) {
 		source->Transit(vk_command, vk::ImageLayout::eTransferSrcOptimal,
 		                vk::AccessFlagBits2::eTransferRead);
 	}
@@ -794,12 +1371,16 @@ void Swapchain::RecordPresentCommands(CommandBuffer& command, Presenter::Frame* 
 	to_transfer.subresourceRange.levelCount     = 1;
 	to_transfer.subresourceRange.baseArrayLayer = 0;
 	to_transfer.subresourceRange.layerCount     = 1;
-	// Match the acquire wait stage so the layout transition cannot precede acquisition.
-	vk_command.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-	                           vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlags {}, 0,
-	                           nullptr, 0, nullptr, 1, &to_transfer);
+	if (!use_fsr) {
+		// Match the acquire wait stage so the layout transition cannot precede acquisition.
+		vk_command.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+		                           vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlags {}, 0,
+		                           nullptr, 0, nullptr, 1, &to_transfer);
+	}
 
-	if (source != nullptr) {
+	if (use_fsr) {
+		RecordFsr(vk_command, *source, draw_attachment);
+	} else if (source != nullptr) {
 		vk::ImageBlit region {};
 		region.srcSubresource.aspectMask     = vk::ImageAspectFlagBits::eColor;
 		region.srcSubresource.mipLevel       = 0;
@@ -841,11 +1422,13 @@ void Swapchain::RecordPresentCommands(CommandBuffer& command, Presenter::Frame* 
 	to_present.subresourceRange.levelCount     = 1;
 	to_present.subresourceRange.baseArrayLayer = 0;
 	to_present.subresourceRange.layerCount     = 1;
-	vk_command.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-	                           draw_attachment ? vk::PipelineStageFlagBits::eColorAttachmentOutput
-	                                           : vk::PipelineStageFlagBits::eAllCommands,
-	                           vk::DependencyFlagBits::eByRegion, 0, nullptr, 0, nullptr, 1,
-	                           &to_present);
+	if (!use_fsr) {
+		vk_command.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+		                           draw_attachment ? vk::PipelineStageFlagBits::eColorAttachmentOutput
+		                                           : vk::PipelineStageFlagBits::eAllCommands,
+		                           vk::DependencyFlagBits::eByRegion, 0, nullptr, 0, nullptr, 1,
+		                           &to_present);
+	}
 	if (draw_attachment) {
 		if (draw_overlay) {
 			DrawOverlay(vk_command, overlay);
@@ -929,13 +1512,29 @@ Presenter::Frame& Presenter::PrepareFrame(CommandBuffer& buffer, const ImageInfo
 		case vk::Format::eB8G8R8A8Srgb: frame_format = vk::Format::eB8G8R8A8Unorm; break;
 		default: break;
 	}
-	auto* frame = m_impl->frames.Acquire({info.extent.width, info.extent.height}, frame_format);
+	vk::Extent2D frame_extent {info.extent.width, info.extent.height};
+	if (Config::GetRenderScale() < 1.0f) {
+		// A render-scaled surface is smaller than its guest extent; pick a matching frame.
+		Common::LockGuard render_lock(m_impl->renderer.GetMutex());
+		const auto&       probe = m_impl->ResolveSurface(info);
+		frame_extent = {probe.backing.extent.width, probe.backing.extent.height};
+	}
+	auto* frame = m_impl->frames.Acquire(frame_extent, frame_format);
 	frame->hdr   = hdr;
 	frame->blank = false;
 	Common::LockGuard render_lock(m_impl->renderer.GetMutex());
 	auto&             image = m_impl->ResolveSurface(info);
 	if (image.backing.format == vk::Format::eUndefined) {
 		EXIT("unsupported presentation source, image=%p\n", static_cast<const void*>(&image));
+	}
+	{
+		static int logged = 0;
+		if (logged++ < 3) {
+			LOGF("RenderScale: present info=%ux%u backing=%ux%u cached_info=%ux%u frame=%ux%u\n",
+			     info.extent.width, info.extent.height, image.backing.extent.width,
+			     image.backing.extent.height, image.info.extent.width, image.info.extent.height,
+			     frame_extent.width, frame_extent.height);
+		}
 	}
 	frame->Configure(m_impl->window.graphic_ctx,
 	                 {image.backing.extent.width, image.backing.extent.height}, frame_format);

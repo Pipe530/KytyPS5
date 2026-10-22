@@ -35,6 +35,8 @@ constexpr uint32_t DEFAULT_CONSOLE_LANGUAGE = 1;
 constexpr uint32_t MAX_CONSOLE_LANGUAGE     = 29;
 constexpr std::size_t MAX_USER_NAME_LENGTH = 16;
 constexpr int32_t DEFAULT_USER_ID           = 1000;
+constexpr float   MAX_MIP_LOD_BIAS_OFFSET   = 3.0f;
+constexpr float   MIN_RENDER_SCALE          = 0.25f;
 
 constexpr int     MAX_PLAYERS         = 4;
 constexpr int32_t PLAYER_USER_ID_STEP = 0x100;
@@ -60,6 +62,12 @@ struct ConfigOptions {
 	// 0 shares player 1 with the first gamepad; 1..MAX_PLAYERS dedicates that player to the keyboard.
 	uint32_t               keyboard_player                = 0;
 	PresentMode            present_mode                = PresentMode::Mailbox;
+	float                  mip_lod_bias_offset         = 0.0f;
+	float                  render_scale                = 1.0f;
+	bool                   fxaa_enabled                = false;
+	bool                   smaa_enabled                = false;
+	float                  fsr_sharpness               = 0.9f;
+	bool                   fsr_enabled                 = false;
 	int32_t                gpu_index                   = -1;
 	bool                   fullscreen_enabled          = false;
 	bool                   hdr_enabled                 = false;
@@ -119,6 +127,21 @@ int      GetPlayerFromUserId(int32_t user_id);
 // Players after the first are guests: they have no profile, trophies or NP account.
 bool     IsGuestUserId(int32_t user_id);
 PresentMode GetPresentMode();
+// Added to every host sampler's LOD bias; clamped to [0, MAX_MIP_LOD_BIAS_OFFSET].
+float    GetMipLodBiasOffset();
+// Internal resolution scale for video-out render targets, in [MIN_RENDER_SCALE, 1].
+float    GetRenderScale();
+// Spatial FSR 1.0 pass on the presentation path.
+bool     FsrEnabled();
+void     SetFsrEnabled(bool enabled);
+// RCAS sharpening strength in [0, 1]; 1 is the strongest.
+float    GetFsrSharpness();
+// Optional FXAA pass applied to the game image before FSR upscaling.
+bool     FxaaEnabled();
+void     SetFxaaEnabled(bool enabled);
+// Optional SMAA 1x pass; takes precedence over FXAA when both are set.
+bool     SmaaEnabled();
+void     SetSmaaEnabled(bool enabled);
 int32_t GetGpuIndex();
 bool     FullscreenEnabled();
 bool     HdrEnabled();

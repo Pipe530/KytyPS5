@@ -206,6 +206,8 @@ struct ShaderPixelInputInfo {
 	bool                                           ps_front_face                = false;
 	bool                                           ps_front_face_all_bits       = false;
 	bool                                           ps_ancillary                 = false;
+	// Host-to-guest pixel coordinate factor for render-scaled targets (1 = unscaled).
+	float                                          ps_frag_coord_scale          = 1.0f;
 	bool                                           ps_no_perspective            = false;
 	ShaderPixelParameterMode                       parameter_mode = ShaderPixelParameterMode::FirstVertex;
 	bool                                           ps_pixel_kill_enable         = false;

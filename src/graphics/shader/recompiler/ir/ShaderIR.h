@@ -484,6 +484,9 @@ struct Bindings {
 	uint64_t descriptor_mask = 0;
 	uint32_t push_data_start_dword = PushData::NoStart;
 	uint32_t dispatch_thread_dword = PushData::NoStart;
+	// Per-image host/guest size ratio for render-scaled images (one float dword per image).
+	uint32_t render_scale_dword = PushData::NoStart;
+	uint32_t render_scale_count = 0;
 	uint32_t memory_offset_dword = 0;
 
 	[[nodiscard]] uint32_t ShaderDataDwords() const {
@@ -533,6 +536,8 @@ struct ShaderInfo {
 	bool                            subgroup_local_invocation_id  = false;
 	bool                            compute_derivatives           = false;
 	bool                            image_gather_extended         = false;
+	// Integer texel coordinates cannot follow a render-scaled FragCoord.
+	bool                            uses_image_fetch              = false;
 	bool                            function_lds                  = false;
 	bool                            function_scratch              = false;
 	bool                            pixel_valid_mask              = false;

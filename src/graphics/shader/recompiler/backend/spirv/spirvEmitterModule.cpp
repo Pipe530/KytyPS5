@@ -1,5 +1,7 @@
 #include "graphics/shader/recompiler/backend/spirv/spirvEmitterInternal.h"
 
+#include "common/emulatorConfig.h"
+
 #include <algorithm>
 #include <bit>
 
@@ -238,6 +240,13 @@ void DefineDescriptors(EmitterState& state) {
 	if (info.uses_dispatch_threads) {
 		bindings.dispatch_thread_dword = bindings.memory_offset_dword;
 		bindings.memory_offset_dword += 3u;
+	}
+	bindings.render_scale_dword = IR::PushData::NoStart;
+	bindings.render_scale_count = 0;
+	if (info.uses_image_fetch && !info.images.empty() && Config::GetRenderScale() < 1.0f) {
+		bindings.render_scale_dword = bindings.memory_offset_dword;
+		bindings.render_scale_count = static_cast<uint32_t>(info.images.size());
+		bindings.memory_offset_dword += bindings.render_scale_count;
 	}
 	bindings.push_data_start_dword =
 	    IR::PushData::StartFor(bindings.push_data_start_dword, bindings.ShaderDataDwords());

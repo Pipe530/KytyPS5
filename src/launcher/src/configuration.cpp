@@ -1,5 +1,7 @@
 #include "configuration.h"
 
+#include <algorithm>
+
 QVariantMap Configuration::GameSettings() const {
 	QVariantMap values;
 #define KYTY_CFG_SET(n) values.insert(QStringLiteral(#n), QVariant::fromValue(n).toString())
@@ -9,6 +11,12 @@ QVariantMap Configuration::GameSettings() const {
 	KYTY_CFG_SET(audio_input_device);
 	KYTY_CFG_SET(present_mode);
 	KYTY_CFG_SET(gpu_index);
+	KYTY_CFG_SET(fsr_enabled);
+	KYTY_CFG_SET(mip_lod_bias_offset);
+	KYTY_CFG_SET(render_scale);
+	KYTY_CFG_SET(fxaa_enabled);
+	KYTY_CFG_SET(smaa_enabled);
+	KYTY_CFG_SET(fsr_sharpness);
 	KYTY_CFG_SET(fullscreen_enabled);
 	KYTY_CFG_SET(hdr_enabled);
 	KYTY_CFG_SET(hide_cursor_enabled);
@@ -61,6 +69,15 @@ void Configuration::ReadGameSettingsValues(const Settings& s) {
 	}
 	KYTY_CFG_GET(fullscreen_enabled);
 	KYTY_CFG_GET(hdr_enabled);
+	fsr_enabled         = s.value("fsr_enabled", fsr_enabled).toBool();
+	mip_lod_bias_offset = std::clamp(
+	    s.value("mip_lod_bias_offset", mip_lod_bias_offset).toFloat(), 0.0f,
+	    Config::MAX_MIP_LOD_BIAS_OFFSET);
+	render_scale = std::clamp(s.value("render_scale", render_scale).toFloat(),
+	                          Config::MIN_RENDER_SCALE, 1.0f);
+	KYTY_CFG_GET(fxaa_enabled);
+	KYTY_CFG_GET(smaa_enabled);
+	fsr_sharpness = std::clamp(s.value("fsr_sharpness", fsr_sharpness).toFloat(), 0.0f, 1.0f);
 	KYTY_CFG_GET(hide_cursor_enabled);
 	KYTY_CFG_GET(readback_linear_images);
 	KYTY_CFG_GET(readback_tiled_images);

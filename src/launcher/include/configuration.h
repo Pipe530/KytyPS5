@@ -122,6 +122,12 @@ public:
 	QString                audio_input_device;
 	PresentMode            present_mode                = PresentMode::Mailbox;
 	int                    gpu_index                   = -1;
+	bool                   fsr_enabled                 = false;
+	float                  mip_lod_bias_offset         = 0.0f;
+	float                  render_scale                = 1.0f;
+	bool                   fxaa_enabled                = false;
+	bool                   smaa_enabled                = false;
+	float                  fsr_sharpness               = 0.9f;
 	bool                   fullscreen_enabled          = false;
 	bool                   hdr_enabled                 = false;
 	bool                   hide_cursor_enabled         = false;
@@ -162,6 +168,12 @@ public:
 		audio_input_device          = other.audio_input_device;
 		present_mode                = other.present_mode;
 		gpu_index                   = other.gpu_index;
+		fsr_enabled                 = other.fsr_enabled;
+		mip_lod_bias_offset         = other.mip_lod_bias_offset;
+		render_scale                = other.render_scale;
+		fxaa_enabled                = other.fxaa_enabled;
+		smaa_enabled                = other.smaa_enabled;
+		fsr_sharpness               = other.fsr_sharpness;
 		fullscreen_enabled          = other.fullscreen_enabled;
 		hdr_enabled                 = other.hdr_enabled;
 		hide_cursor_enabled         = other.hide_cursor_enabled;

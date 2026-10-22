@@ -681,7 +681,7 @@ PipelineCache::GraphicsPrograms PipelineCache::GetGraphicsPrograms(
     const HW::VertexShaderInfo& vertex_regs, const HW::PixelShaderInfo& pixel_regs,
     const HW::ShaderRegisters& sh, const HW::Context& context, const HW::UserConfig& user_config,
     std::span<const Prospero::ColorComponentMapping, 8> target_export_mapping, bool pixel_active,
-    std::array<ShaderVertexInputInfo, 3>& vertex_info, ShaderPixelInputInfo& pixel_info) {
+    std::array<ShaderVertexInputInfo, 3>& vertex_info, ShaderPixelInputInfo& pixel_info, bool allow_frag_coord_scale) {
 	const bool tess_active = user_config.GetPrimType() == Prospero::PrimitiveType::kPatch;
 	std::array<ShaderParams, 3> vertex_params;
 	if (tess_active) {
@@ -812,6 +812,22 @@ PipelineCache::GraphicsPrograms PipelineCache::GetGraphicsPrograms(
 	}
 	uint32_t push_data_cursor = ShaderRecompiler::IR::PushData::GraphicsDrawDwords(
 	    mesh_active, object_primitive_id, last_stage.user_clip_planes);
+	if (pixel_active && allow_frag_coord_scale && Config::GetRenderScale() < 1.0f) {
+		// Mirror ImageInfo::RenderScaleEligible for the first bound color target.
+		for (uint32_t slot = 0; slot < 8u; slot++) {
+			const auto& rt = context.GetRenderTarget(slot);
+			if (rt.base.addr == 0 ||
+			    render_target_mask_slot(context.GetRenderTargetMask(), slot) == 0u) {
+				continue;
+			}
+			const uint64_t w = rt.attrib2.width + 1u;
+			const uint64_t h = rt.attrib2.height + 1u;
+			if (w >= 2560 && h >= 1440 && w * 10 >= h * 16) {
+				pixel_info.ps_frag_coord_scale = 1.0f / Config::GetRenderScale();
+			}
+			break;
+		}
+	}
 	GraphicsPrograms  result;
 	if (pixel_active) {
 		result.pixel = m_program_cache->Get(pixel_params, pixel_info, push_data_cursor);

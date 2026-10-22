@@ -1,6 +1,7 @@
 #include "graphics/host_gpu/renderer/image/image.h"
 
 #include "common/assert.h"
+#include "common/emulatorConfig.h"
 #include "common/logging/log.h"
 #include "common/profiler.h"
 #include "graphics/host_gpu/renderer/cache/streamBuffer.h"
@@ -11,6 +12,7 @@
 #include "kernel/memory.h"
 
 #include <algorithm>
+#include <cmath>
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -242,6 +244,13 @@ void Image::Upload(std::span<const vk::BufferImageCopy> copies, vk::Buffer buffe
                    uint64_t size) {
 	EXIT_IF(copies.empty() || buffer == nullptr || size == 0);
 	m_scheduler.EndRendering();
+	if (IsScaled()) {
+		// Guest data cannot be mapped onto a scaled host image; keep it render-only.
+		Transit(vk::ImageLayout::eGeneral,
+		        vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eTransferRead, {},
+		        m_scheduler.Current().Handle());
+		return;
+	}
 	vk::BufferMemoryBarrier2 buffer_barrier {};
 	buffer_barrier.srcStageMask        = vk::PipelineStageFlagBits2::eAllCommands;
 	buffer_barrier.srcAccessMask       = vk::AccessFlagBits2::eMemoryWrite;
@@ -280,6 +289,9 @@ void Image::Upload(std::span<const vk::BufferImageCopy> copies, vk::Buffer buffe
 void Image::Download(std::span<const vk::BufferImageCopy> copies, vk::Buffer buffer,
                      uint64_t offset, uint64_t size) {
 	EXIT_IF(copies.empty() || buffer == nullptr || size == 0);
+	if (IsScaled()) {
+		return;
+	}
 	m_scheduler.EndRendering();
 	vk::BufferMemoryBarrier2 buffer_barrier {};
 	buffer_barrier.srcStageMask = vk::PipelineStageFlagBits2::eAllCommands;
@@ -340,6 +352,48 @@ std::pair<uint32_t, uint32_t> Image::SanitizeCopyLayers(const Image& source,
 void Image::CopyImage(Image& source) {
 	EXIT_IF(source.backing.samples != backing.samples);
 	m_scheduler.EndRendering();
+	if (IsScaled() || source.IsScaled()) {
+		const auto sx = static_cast<float>(source.backing.extent.width) / source.info.extent.width;
+		const auto sy = static_cast<float>(source.backing.extent.height) / source.info.extent.height;
+		const auto dx = static_cast<float>(backing.extent.width) / info.extent.width;
+		const auto dy = static_cast<float>(backing.extent.height) / info.extent.height;
+		if (sx == dx && sy == dy) {
+			// Equal scale: the generic path below works in backing extents.
+		} else {
+			if (backing.samples != 1 ||
+			    source.backing.image_type != vk::ImageType::e2D ||
+			    backing.image_type != vk::ImageType::e2D ||
+			    source.backing.format != backing.format) {
+				return;
+			}
+			const auto gw = std::min(source.info.extent.width, info.extent.width);
+			const auto gh = std::min(source.info.extent.height, info.extent.height);
+			const auto aspect =
+			    FullAspectMask(backing.format) & ~vk::ImageAspectFlagBits::eStencil;
+			const auto clamp_to = [](float v, uint32_t max) {
+				return static_cast<int32_t>(std::clamp<float>(std::round(v), 1.0f, max));
+			};
+			vk::ImageBlit blit {};
+			blit.srcSubresource = {aspect, 0, 0, 1};
+			blit.dstSubresource = {aspect, 0, 0, 1};
+			blit.srcOffsets[1]  = vk::Offset3D {clamp_to(gw * sx, source.backing.extent.width),
+			                                    clamp_to(gh * sy, source.backing.extent.height), 1};
+			blit.dstOffsets[1]  = vk::Offset3D {clamp_to(gw * dx, backing.extent.width),
+			                                    clamp_to(gh * dy, backing.extent.height), 1};
+			auto command        = m_scheduler.Current().Handle();
+			source.Transit(vk::ImageLayout::eTransferSrcOptimal,
+			               vk::AccessFlagBits2::eTransferRead, {}, command);
+			Transit(vk::ImageLayout::eTransferDstOptimal, vk::AccessFlagBits2::eTransferWrite, {},
+			        command);
+			command.blitImage(source.backing.image, vk::ImageLayout::eTransferSrcOptimal,
+			                  backing.image, vk::ImageLayout::eTransferDstOptimal, blit,
+			                  vk::Filter::eNearest);
+			Transit(vk::ImageLayout::eGeneral,
+			        vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eTransferRead, {},
+			        command);
+			return;
+		}
+	}
 	const uint32_t levels     = std::min(source.backing.mip_levels, backing.mip_levels);
 	const uint32_t base_depth = source.backing.image_type == backing.image_type
 	                                ? std::min(source.backing.extent.depth, backing.extent.depth)
@@ -415,15 +469,18 @@ void Image::Resolve(Image& source, const ImageSubresourceRange& source_range,
 	const auto destination_height =
 	    std::max(backing.extent.height >> destination_range.base_level, 1u);
 	const bool copy = source.backing.samples == 1;
-	EXIT_IF(layers == 0 || info.extent.width > source_width || info.extent.height > source_height ||
-	        info.extent.width > destination_width || info.extent.height > destination_height ||
+	const bool scaled = IsScaled() || source.IsScaled();
+	const auto extent_width  = scaled ? std::min(source_width, destination_width) : info.extent.width;
+	const auto extent_height = scaled ? std::min(source_height, destination_height) : info.extent.height;
+	EXIT_IF(layers == 0 || extent_width > source_width || extent_height > source_height ||
+	        extent_width > destination_width || extent_height > destination_height ||
 	        (copy ? !ImageViewOps::FormatsCompatible(source.backing.format, backing.format)
 	              : source.backing.format != backing.format));
 	auto resolved_source_range             = source_range;
 	auto resolved_destination_range        = destination_range;
 	resolved_source_range.layer_count      = layers;
 	resolved_destination_range.layer_count = layers;
-	const vk::Extent3D resolve_extent {info.extent.width, info.extent.height, 1};
+	const vk::Extent3D resolve_extent {extent_width, extent_height, 1};
 
 	m_scheduler.EndRendering();
 	auto command = m_scheduler.Current().Handle();
@@ -464,6 +521,9 @@ uint32_t Image::CopyRows(uint64_t row_size, uint32_t rows, uint64_t capacity) no
 void Image::CopyImageWithBuffer(Image& source, Buffer& buffer, TileManager& tiler) {
 	EXIT_IF(buffer.Handle() == nullptr || source.backing.samples != 1 || backing.samples != 1);
 	m_scheduler.EndRendering();
+	if (IsScaled() || source.IsScaled()) {
+		return;
+	}
 	const uint32_t levels = std::min(source.backing.mip_levels, backing.mip_levels);
 	const auto     source_aspect =
 	    FullAspectMask(source.backing.format) & ~vk::ImageAspectFlagBits::eStencil;
@@ -568,6 +628,9 @@ void Image::CopyMip(Image& source, uint32_t mip, uint32_t layer) {
 	EXIT_IF(source.backing.samples != backing.samples || mip >= backing.mip_levels ||
 	        layer >= backing.layers);
 	m_scheduler.EndRendering();
+	if (IsScaled() != source.IsScaled()) {
+		return;
+	}
 	const auto width  = std::max(backing.extent.width >> mip, 1u);
 	const auto height = std::max(backing.extent.height >> mip, 1u);
 	const auto depth  = std::max(backing.extent.depth >> mip, 1u);
@@ -689,6 +752,14 @@ Prospero::BufferFormat RenderTargetTransferFormat(uint32_t bytes_per_element) {
 
 } // namespace ImageOps
 
+bool ImageInfo::RenderScaleEligible() const {
+	return Config::GetRenderScale() < 1.0f && !IsVolume() && type == Prospero::ImageType::kColor2D &&
+	       extent.width >= 2560 && extent.height >= 1440 && extent.depth == 1 &&
+	       // Screen-shaped targets only; square reflection and shadow maps are sampled later.
+	       static_cast<uint64_t>(extent.width) * 10 >= static_cast<uint64_t>(extent.height) * 16 &&
+	       resources.levels == 1 && resources.layers == 1;
+}
+
 Image::Image(GraphicContext& graphics, CommandScheduler& scheduler, const ImageInfo& image_info)
     : info(image_info),
       stencil_subresources {0, image_info.resources.levels, 0, image_info.resources.layers},
@@ -705,6 +776,12 @@ Image::Image(GraphicContext& graphics, CommandScheduler& scheduler, const ImageI
 	create.flags         = ImageCreateFlags(graphics, info);
 	create.imageType     = HostImageType(info.type);
 	create.extent        = info.extent;
+	if (info.render_scaled) {
+		const float scale   = Config::GetRenderScale();
+		create.extent.width = std::max(1u, static_cast<uint32_t>(info.extent.width * scale + 0.5f));
+		create.extent.height =
+		    std::max(1u, static_cast<uint32_t>(info.extent.height * scale + 0.5f));
+	}
 	create.mipLevels     = info.resources.levels;
 	create.arrayLayers   = info.IsVolume() ? 1u : info.resources.layers;
 	create.format        = info.pixel_format;

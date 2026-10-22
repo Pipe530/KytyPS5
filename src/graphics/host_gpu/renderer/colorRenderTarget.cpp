@@ -219,6 +219,7 @@ void RenderExecutor::ResolveRenderColorTarget(CommandBuffer& buffer, RenderColor
 	desc.info.bytes_per_block = bytes_per_element;
 	desc.info.samples         = samples;
 	desc.info.tile_mode       = rt.attrib3.tile_mode;
+	desc.info.render_scaled  = desc.info.RenderScaleEligible();
 	if (!volume && rt.attrib3.tile_mode == Prospero::TileMode::kRenderTarget &&
 	    levels > std::bit_width(std::max(width, height))) {
 		EXIT("unsupported render-target mip count\n");

@@ -65,6 +65,12 @@ static void PrintUsage() {
 	    "  --gpu <index>                        Vulkan physical device index. Default: auto.\n");
 	::printf("  --fullscreen                         Run in borderless desktop fullscreen.\n");
 	::printf("  --hdr                                Enable HDR10 output when supported.\n");
+	::printf("  --fsr                                Upscale the final image with FSR 1.0.\n");
+	::printf("  --fxaa                               Apply FXAA to the game image before FSR/presentation.\n");
+	::printf("  --smaa                               Apply SMAA 1x to the game image before FSR/presentation (overrides FXAA).\n");
+	::printf("  --fsr-sharpness <0-1>                FSR RCAS sharpening strength. Default: 0.9.\n");
+	::printf("  --mip-lod-bias-offset <0-3>          Added to every sampler's mip LOD bias. Default: 0.\n");
+	::printf("  --render-scale <0.25-1>              Internal resolution of the final video-out render target (experimental). Default: 1.\n");
 	::printf(
 	    "  --hide-cursor                        Hide the cursor after 2 s idle. Default: off.\n");
 	::printf("  --no-splash                          Disable the startup splash screen.\n");
@@ -160,6 +166,39 @@ static bool ParseControllerColor(const std::string& value, Config::ControllerCol
 	return true;
 }
 
+static bool ParseMipLodBiasOffset(const std::string& value, float& out) {
+	float number      = 0.0f;
+	auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), number);
+	if (error != std::errc {} || end != value.data() + value.size() || !(number >= 0.0f) ||
+	    number > Config::MAX_MIP_LOD_BIAS_OFFSET) {
+		return false;
+	}
+	out = number;
+	return true;
+}
+
+static bool ParseRenderScale(const std::string& value, float& out) {
+	float number      = 0.0f;
+	auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), number);
+	if (error != std::errc {} || end != value.data() + value.size() ||
+	    !(number >= Config::MIN_RENDER_SCALE) || number > 1.0f) {
+		return false;
+	}
+	out = number;
+	return true;
+}
+
+static bool ParseFsrSharpness(const std::string& value, float& out) {
+	float number      = 0.0f;
+	auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), number);
+	if (error != std::errc {} || end != value.data() + value.size() || !(number >= 0.0f) ||
+	    number > 1.0f) {
+		return false;
+	}
+	out = number;
+	return true;
+}
+
 static bool ParseInt32(const std::string& value, int32_t& out) {
 	int32_t number    = 0;
 	auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), number);
@@ -193,6 +232,9 @@ static constexpr Flag FLAGS[] = {
     {"--rd", &ConfigOptions::renderdoc_enabled},
     {"--fullscreen", &ConfigOptions::fullscreen_enabled},
     {"--hdr", &ConfigOptions::hdr_enabled},
+    {"--fsr", &ConfigOptions::fsr_enabled},
+    {"--fxaa", &ConfigOptions::fxaa_enabled},
+    {"--smaa", &ConfigOptions::smaa_enabled},
     {"--hide-cursor", &ConfigOptions::hide_cursor_enabled},
     {"--no-splash", &ConfigOptions::splash_enabled, false},
     {"--vr", &ConfigOptions::vr_enabled},
@@ -360,6 +402,23 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 		} else if (arg == "--gpu") {
 			if (!ParseInt32(value, options.config.gpu_index)) {
 				::printf("invalid gpu index: %s\n", value.c_str());
+				return false;
+			}
+		} else if (arg == "--mip-lod-bias-offset") {
+			if (!ParseMipLodBiasOffset(value, options.config.mip_lod_bias_offset)) {
+				::printf("invalid mip LOD bias offset (expected 0-%g): %s\n",
+				         static_cast<double>(Config::MAX_MIP_LOD_BIAS_OFFSET), value.c_str());
+				return false;
+			}
+		} else if (arg == "--fsr-sharpness") {
+			if (!ParseFsrSharpness(value, options.config.fsr_sharpness)) {
+				::printf("invalid FSR sharpness (expected 0-1): %s\n", value.c_str());
+				return false;
+			}
+		} else if (arg == "--render-scale") {
+			if (!ParseRenderScale(value, options.config.render_scale)) {
+				::printf("invalid render scale (expected %g-1): %s\n",
+				         static_cast<double>(Config::MIN_RENDER_SCALE), value.c_str());
 				return false;
 			}
 		} else if (arg == "--vblank-frequency") {
