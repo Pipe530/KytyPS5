@@ -655,6 +655,16 @@ static vk::Device VulkanCreateDevice(GraphicContext& graphics,
 		    vk::SampleCountFlagBits::e1;
 	}
 	graphics.sample_rate_shading_enabled                 = true;
+	// Occlusion queries reset their queries from the host and count samples exactly where they can.
+	graphics.occlusion_queries_enabled =
+	    Config::OcclusionQueriesEnabled() && supported_features12.hostQueryReset;
+	graphics.occlusion_query_precise_enabled =
+	    graphics.occlusion_queries_enabled && supported_features2.features.occlusionQueryPrecise;
+	features12.hostQueryReset             = graphics.occlusion_queries_enabled;
+	device_features.occlusionQueryPrecise = graphics.occlusion_query_precise_enabled;
+	LOGF("Vulkan occlusion queries: %s, precise: %s\n",
+	     graphics.occlusion_queries_enabled ? "true" : "false",
+	     graphics.occlusion_query_precise_enabled ? "true" : "false");
 	device_features.shaderInt64 = VK_TRUE;
 	device_features.shaderFloat64 =
 	    supported_features2.features.shaderFloat64 &&

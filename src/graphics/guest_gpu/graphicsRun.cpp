@@ -237,6 +237,8 @@ void CommandProcessor::BufferInit() {
 
 void CommandProcessor::BufferFlush() {
 	GetScheduler().Flush();
+	// The occlusion counters reach a guest that polls them without waiting for a later fence.
+	m_renderer.GetOcclusionQueries().Publish();
 }
 
 void CommandProcessor::BufferWait() {
@@ -803,6 +805,7 @@ void CommandProcessor::SetPredication(uint32_t condition, uint32_t op, uint32_t 
 			return;
 		case 0x01: {
 			EXIT_NOT_IMPLEMENTED(address == nullptr);
+			m_renderer.GetOcclusionQueries().Publish();
 			// One begin/end pair per DB; bit 63 marks each counter ready.
 			constexpr uint64_t ready_bit = 1ull << 63u;
 			const auto* results = reinterpret_cast<const volatile uint64_t*>(address);
@@ -1047,6 +1050,8 @@ void CommandProcessor::WriteAtEndOfPipe(uint32_t cache_policy, uint32_t event_wr
 
 	EXIT_NOT_IMPLEMENTED(cache_policy != 0x00000000);
 	EXIT_NOT_IMPLEMENTED(event_write_dest != 0x00000000);
+	// Dumped occlusion counters are written before any end-of-pipe signal reaches the guest.
+	m_renderer.GetOcclusionQueries().Publish();
 
 	bool with_interrupt = false;
 	switch (interrupt_selector) {
@@ -1213,6 +1218,7 @@ void CommandProcessor::WriteAtEndOfPipe64(uint32_t cache_policy, uint32_t event_
 }
 
 void CommandProcessor::TriggerEopEventAtEndOfPipe(uint32_t interrupt_context_id) {
+	m_renderer.GetOcclusionQueries().Publish();
 	(void)CurrentBuffer().Handle();
 	GetScheduler().DeferPriorityOperation(
 	    [&renderer = m_renderer, event_id = m_interrupt_event_id, interrupt_context_id] {
@@ -1270,15 +1276,19 @@ void CommandProcessor::TriggerEvent(uint32_t event_type, uint32_t event_index,
 				     "\n",
 				     event_index, event_address);
 			}
+			if (auto& queries = m_renderer.GetOcclusionQueries(); queries.Enabled()) {
+				queries.Dump(event_address);
+				break;
+			}
 			static std::once_flag warning_once;
 			std::call_once(warning_once, [] {
-				std::printf("Warning: game uses occlusion queries, which are currently treated as "
-				            "always visible; GPU usage may be higher and FPS may be lower.\n");
+				std::printf("Warning: game uses occlusion queries, which are treated as always "
+				            "visible without --occlusion-queries; GPU usage may be higher and FPS "
+				            "may be lower.\n");
 			});
 
-			// Until host occlusion queries are implemented, publish an always-visible result. The
-			// PS5 layout contains one interleaved begin/end pair per DB, and bit 63 marks a result
-			// ready.
+			// Without host occlusion queries, publish an always-visible result. The PS5 layout
+			// contains one interleaved begin/end pair per DB, and bit 63 marks a result ready.
 			constexpr uint64_t ready_bit    = 1ull << 63u;
 			constexpr uint64_t counter_mask = ready_bit - 1u;
 			auto*              results      = reinterpret_cast<volatile uint64_t*>(event_address);
@@ -1298,6 +1308,7 @@ void CommandProcessor::Flip() {
 	if (GraphicsRunDebugDumpEnabled()) {
 		LOGF("CommandProcessor::Flip()\n");
 	}
+	m_renderer.GetOcclusionQueries().Publish();
 
 	auto& command = CurrentBuffer();
 	auto request = Sync::PrepareVideoOutFlip(command, m_flip.handle, m_flip.index, m_flip.flip_mode,
@@ -1309,8 +1320,6 @@ void CommandProcessor::Flip() {
 }
 
 void CommandProcessor::Flip(void* dst_gpu_addr, uint32_t value) {
-	auto& command = CurrentBuffer();
-
 	if (GraphicsRunDebugDumpEnabled()) {
 		LOGF("CommandProcessor::Flip()\n"
 		     "\t dst_gpu_addr = 0x%016" PRIx64 "\n"
@@ -1319,13 +1328,9 @@ void CommandProcessor::Flip(void* dst_gpu_addr, uint32_t value) {
 	}
 
 	EXIT_IF(dst_gpu_addr == nullptr);
+	m_renderer.GetOcclusionQueries().Publish();
 	std::memcpy(dst_gpu_addr, &value, sizeof(value));
-	auto request = Sync::PrepareVideoOutFlip(command, m_flip.handle, m_flip.index, m_flip.flip_mode,
-	                                         m_flip.flip_arg);
-	(void)command.Handle();
-	GetScheduler().DeferPriorityOperation(
-	    [&renderer = m_renderer, request] { renderer.GetVideoOut().CompleteFlip(request); });
-	GetScheduler().Flush();
+	Flip();
 }
 
 void CommandProcessor::FlipWithInterrupt(uint32_t eop_event_type, uint32_t cache_action,
@@ -1345,6 +1350,7 @@ void CommandProcessor::FlipWithInterrupt(uint32_t eop_event_type, uint32_t cache
 		EXIT("unknown event type\n");
 	}
 	EXIT_IF(dst_gpu_addr == nullptr);
+	m_renderer.GetOcclusionQueries().Publish();
 	std::memcpy(dst_gpu_addr, &value, sizeof(value));
 	auto request = Sync::PrepareVideoOutFlip(command, m_flip.handle, m_flip.index, m_flip.flip_mode,
 	                                         m_flip.flip_arg);
