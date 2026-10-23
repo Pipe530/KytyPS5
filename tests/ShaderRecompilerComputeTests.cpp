@@ -3362,6 +3362,38 @@ public:
                 interrupt_event.ident == 0x20 && interrupt_event.data == 0x789u,
             "kSendIntCtx lost its interrupt or context id");
 
+    // A GDS release interrupt follows the interrupts queued before it, so
+    // neither arrives while the priority thread is parked.
+    std::binary_semaphore priority_parked{0};
+    gpu.SendCommandSync([&] {
+      auto &scheduler = context.GetCommandScheduler();
+      scheduler.Finish();
+      scheduler.DeferPriorityOperation([&] { priority_parked.acquire(); });
+    });
+    uint32_t ordered_gds_label = 0;
+    const auto ordered_first = make_interrupt_packet(0, 2, nullptr, 0, 0xa1u);
+    const auto ordered_gds =
+        make_interrupt_packet(5, 2, &ordered_gds_label, 1u << 16u, 0xa2u);
+    std::array<uint32_t, 16> ordered_commands{};
+    std::copy(ordered_first.begin(), ordered_first.end(), ordered_commands.begin());
+    std::copy(ordered_gds.begin(), ordered_gds.end(), ordered_commands.begin() + 8);
+    gpu.SubmitCompute(0x20, ordered_commands);
+    gpu.WaitForIdle();
+    interrupt_count = 0;
+    const auto parked_wait = wait_for_interrupt(interrupt_event, interrupt_count);
+    priority_parked.release();
+    finish_gpu();
+    LibKernel::EventQueue::KernelEvent second_event{};
+    int second_count = 0;
+    interrupt_count = 0;
+    const auto first_wait = wait_for_interrupt(interrupt_event, interrupt_count);
+    const auto second_wait = wait_for_interrupt(second_event, second_count);
+    Require("GpuCommandLane", "GDS interrupt order",
+            parked_wait == LibKernel::KERNEL_ERROR_ETIMEDOUT && first_wait == 0 &&
+                interrupt_count == 1 && interrupt_event.data == 0xa1u &&
+                second_wait == 0 && second_count == 1 && second_event.data == 0xa2u,
+            "a GDS release interrupt overtook an earlier interrupt");
+
     interrupt_count = 0;
     const auto extra_interrupt_wait =
         wait_for_interrupt(interrupt_event, interrupt_count);

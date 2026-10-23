@@ -979,11 +979,7 @@ void CommandProcessor::ReleaseMem(uint32_t data_sel, uint32_t interrupt_selector
 			const auto gds = static_cast<uint32_t>(data);
 			Sync::ReadGds(*m_renderer.GetBufferCache().GetGdsBuffer(),
 			              static_cast<uint32_t*>(address), gds & 0xffffu, gds >> 16u);
-			if (interrupt) {
-				// The GPU is idle, so the interrupt needs no fence.
-				m_renderer.TriggerInterrupt(m_interrupt_event_id, interrupt_context_id);
-			}
-			return;
+			break;
 		}
 		default: EXIT("unknown release_mem data selector: %" PRIu32 "\n", data_sel);
 	}
