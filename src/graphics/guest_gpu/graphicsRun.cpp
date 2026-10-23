@@ -988,12 +988,12 @@ void CommandProcessor::ReleaseMem(uint32_t data_sel, uint32_t interrupt_selector
 		default: EXIT("unknown release_mem data selector: %" PRIu32 "\n", data_sel);
 	}
 
+	// GuestGpu::Process's end-of-slice flush submits the work this interrupt waits on.
 	if (interrupt) {
 		GetScheduler().DeferPriorityOperation(
 		    [&renderer = m_renderer, event_id = m_interrupt_event_id, interrupt_context_id] {
 			    renderer.TriggerInterrupt(event_id, interrupt_context_id);
 		    });
-		BufferFlush();
 	}
 }
 

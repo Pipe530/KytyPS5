@@ -3041,7 +3041,7 @@ public:
               cache_event_did_not_submit &&
               cb_db_release_did_not_submit &&
               interrupt_result == Pm4ProcessResult::Complete &&
-              gpu_scheduler.CurrentTick() == interrupt_tick + 1 &&
+              gpu_scheduler.CurrentTick() == interrupt_tick &&
               interrupt_only_gds_label == UINT64_MAX;
         });
         parser_complete.release();
@@ -3066,8 +3066,8 @@ public:
               "CPU-only unmap submitted or waited for unrelated native work");
       Require("GpuCommandLane", "nonblocking GPU packets",
               parser_did_not_wait_gpu && parser_kept_nonblocking_boundaries,
-              "a cache event, GL2 writeback, or interrupt boundary used the "
-              "wrong submission behavior");
+              "a cache event, GL2 writeback, or interrupt used the wrong "
+              "submission behavior");
 
       alignas(uint64_t) uint64_t release_label = 0;
       alignas(uint64_t) uint64_t gds_label = UINT64_MAX;
@@ -3076,7 +3076,7 @@ public:
         processor->BufferInit();
 
         // Every end-of-pipe and end-of-shader action, with or without GL2
-        // writeback, writes each label size and splits for its interrupt.
+        // writeback, writes each label size and submits nothing for its interrupt.
         for (const uint32_t action : {0x04u, 0x14u, 0x28u, 0x2bu, 0x2du, 0x2fu, 0x30u}) {
           for (const uint32_t gcr : {0u, 1u << 9u}) {
             for (const uint32_t data_sel : {1u, 2u, 3u}) {
@@ -3098,25 +3098,10 @@ public:
               Require("GpuCommandLane", "release with write-confirm interrupt",
                       release_result == Pm4ProcessResult::Complete &&
                           label_written &&
-                          gpu_scheduler.CurrentTick() == release_tick + 1,
-                      "an end-of-pipe action lost its label or interrupt split");
+                          gpu_scheduler.CurrentTick() == release_tick,
+                      "an end-of-pipe action lost its label or submitted work");
             }
           }
-        }
-
-        for (const auto interrupt : {0u, 3u, 1u, 2u}) {
-          release_label = 0;
-          auto immediate = make_release_mem(1, interrupt, &release_label, 0x11223344u);
-          Pm4Execution immediate_execution;
-          const auto immediate_tick = gpu_scheduler.CurrentTick();
-          const auto immediate_result =
-              processor->Process(immediate_execution, immediate);
-          Require("GpuCommandLane", "32-bit release boundary",
-                  immediate_result == Pm4ProcessResult::Complete &&
-                      gpu_scheduler.CurrentTick() ==
-                          immediate_tick + (interrupt == 1 || interrupt == 2) &&
-                      release_label == (interrupt == 1 ? 0 : 0x11223344u),
-                  "label-only release submitted work or interrupt release lost its boundary");
         }
 
         auto gds = make_release_mem(5, 0, &gds_label, 1ull << 16u);
@@ -3125,14 +3110,6 @@ public:
         const auto gds_result = processor->Process(gds_execution, gds);
         const bool gds_waited_once =
             gpu_scheduler.CurrentTick() == gds_tick + 1;
-
-        auto interrupt_only = make_release_mem(0, 4, nullptr, 0);
-        Pm4Execution interrupt_execution;
-        const auto interrupt_tick = gpu_scheduler.CurrentTick();
-        const auto interrupt_result =
-            processor->Process(interrupt_execution, interrupt_only);
-        const bool interrupt_split_once =
-            gpu_scheduler.CurrentTick() == interrupt_tick + 1;
 
         auto gds_interrupt = make_release_mem(5, 2, &gds_label, 1ull << 16u);
         Pm4Execution gds_interrupt_execution;
@@ -3143,9 +3120,7 @@ public:
             gpu_scheduler.CurrentTick() == gds_interrupt_tick + 1;
 
         release_mem_submission_counts =
-            gds_result == Pm4ProcessResult::Complete &&
-            gds_waited_once && interrupt_result == Pm4ProcessResult::Complete &&
-            interrupt_split_once &&
+            gds_result == Pm4ProcessResult::Complete && gds_waited_once &&
             gds_interrupt_result == Pm4ProcessResult::Complete &&
             gds_interrupt_waited_once;
       });
@@ -3155,10 +3130,9 @@ public:
       });
       Require("GpuCommandLane", "RELEASE_MEM submission counts",
               release_mem_submission_counts &&
-                  static_cast<uint32_t>(release_label) == 0x11223344u &&
                   static_cast<uint32_t>(gds_label) == 0,
-              "RELEASE_MEM lost its required split/readback or retained a "
-              "redundant GPU wait");
+              "RELEASE_MEM lost its GDS readback or retained a redundant GPU "
+              "wait");
     }
 
     alignas(uint32_t) uint32_t packet_marker_a = 0;
@@ -3241,10 +3215,11 @@ public:
           packet[7] = context_id & 0x07ffffffu;
           return packet;
         };
+    // Waits only for submitted work, so an interrupt arrives only through its
+    // end-of-slice flush.
     const auto finish_gpu = [&] {
       gpu.SendCommandSync([&] {
         auto &scheduler = context.GetCommandScheduler();
-        scheduler.Finish();
         scheduler.WaitPriorityOperations(scheduler.CurrentTick() - 1);
       });
     };
@@ -3255,10 +3230,10 @@ public:
               interrupt_queue, &event, 1, &count, &timeout);
         };
 
+    // kDataAfterWriteConfirm writes its label without an interrupt.
     uint32_t no_interrupt_graphics_value = 0;
-    std::array<uint32_t, 5> no_interrupt_graphics_commands{};
-    write_packet(no_interrupt_graphics_commands.data(),
-                 &no_interrupt_graphics_value, 55);
+    auto no_interrupt_graphics_commands =
+        make_interrupt_packet(1, 3, &no_interrupt_graphics_value, 55, 0);
     gpu.Submit(no_interrupt_graphics_commands);
     gpu.WaitForIdle();
     finish_gpu();
@@ -3270,7 +3245,8 @@ public:
     Require("GpuCommandLane", "no implicit graphics interrupt",
             no_graphics_interrupt_wait == LibKernel::KERNEL_ERROR_ETIMEDOUT &&
                 interrupt_count == 0 && no_interrupt_graphics_value == 55,
-            "graphics submission completion synthesized an interrupt");
+            "kDataAfterWriteConfirm or graphics submission completion raised an "
+            "interrupt");
 
     auto live_interrupt_commands =
         make_interrupt_packet(0, 1, nullptr, 0, 0x234u);
@@ -3372,6 +3348,19 @@ public:
                 interrupt_event.udata == &compute_interrupt_udata &&
                 compute_done_label == compute_done_value,
             "CS_DONE lost its full 64-bit label write or write-confirm interrupt");
+
+    auto send_context_commands = make_interrupt_packet(0, 4, nullptr, 0, 0x789u);
+    gpu.SubmitCompute(0x20, send_context_commands);
+    gpu.WaitForIdle();
+    finish_gpu();
+
+    interrupt_count = 0;
+    const auto send_context_wait =
+        wait_for_interrupt(interrupt_event, interrupt_count);
+    Require("GpuCommandLane", "kSendIntCtx interrupt",
+            send_context_wait == 0 && interrupt_count == 1 &&
+                interrupt_event.ident == 0x20 && interrupt_event.data == 0x789u,
+            "kSendIntCtx lost its interrupt or context id");
 
     interrupt_count = 0;
     const auto extra_interrupt_wait =
