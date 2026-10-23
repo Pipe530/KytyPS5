@@ -2712,7 +2712,7 @@ public:
     write(compute_list.data(), &async_value, 29);
     // A frame can contain many lists; completing them must not age either cache.
     for (uint32_t i = 0; i < 32; ++i) {
-      gpu.Submit(graphics_list, {});
+      gpu.Submit(graphics_list);
       gpu.SubmitCompute(0x20, compute_list);
     }
     finish();
@@ -2832,7 +2832,7 @@ public:
       release_lane.acquire();
     });
     lane_entered.acquire();
-    gpu.Submit(before, {});
+    gpu.Submit(before);
     std::binary_semaphore queued_returned{0};
     std::jthread queued([&] {
       gpu.SuspendPoint();
@@ -2849,7 +2849,7 @@ public:
               "suspend-point insertion drained pending guest graphics");
     }
     queued.join();
-    gpu.Submit(after, {});
+    gpu.Submit(after);
     release_lane.release();
     bool prefix_reached = false;
     bool graphics_ordered = false;
@@ -3000,8 +3000,7 @@ public:
           auto packet = make_release_mem(0, 0, nullptr, 0);
           Pm4Execution execution;
           const auto result = processor->Process(execution, packet);
-          processor->IncrementDe();
-          const bool cache_and_counter_did_not_submit =
+          const bool cache_event_did_not_submit =
               result == Pm4ProcessResult::Complete &&
               gpu_scheduler.CurrentTick() == tick_before;
 
@@ -3039,7 +3038,7 @@ public:
           const auto interrupt_result =
               processor->Process(gds_interrupt_execution, gds_interrupt_only);
           parser_kept_nonblocking_boundaries =
-              cache_and_counter_did_not_submit &&
+              cache_event_did_not_submit &&
               cb_db_release_did_not_submit &&
               interrupt_result == Pm4ProcessResult::Complete &&
               gpu_scheduler.CurrentTick() == interrupt_tick + 1 &&
@@ -3067,9 +3066,8 @@ public:
               "CPU-only unmap submitted or waited for unrelated native work");
       Require("GpuCommandLane", "nonblocking GPU packets",
               parser_did_not_wait_gpu && parser_kept_nonblocking_boundaries,
-              "a cache event, GL2 writeback, DE counter, or interrupt boundary "
-              "used the wrong "
-              "submission behavior");
+              "a cache event, GL2 writeback, or interrupt boundary used the "
+              "wrong submission behavior");
 
       alignas(uint64_t) uint64_t release_label = 0;
       alignas(uint64_t) uint64_t gds_label = UINT64_MAX;
@@ -3078,10 +3076,13 @@ public:
         processor->BufferInit();
 
         const auto clock_before = Sync::ReadReferenceClock();
-        processor->WriteAtEndOfPipe64(0, 0, 0x04, 0x38, 5, 4,
-                                     &release_label, UINT64_MAX, 2);
-        Require("GpuCommandLane", "EOP reference clock with interrupt",
-                release_label >= clock_before &&
+        auto clock_release =
+            make_release_mem(3, 2, &release_label, UINT64_MAX, 0x04u);
+        Pm4Execution clock_execution;
+        Require("GpuCommandLane", "release reference clock with interrupt",
+                processor->Process(clock_execution, clock_release) ==
+                        Pm4ProcessResult::Complete &&
+                    release_label >= clock_before &&
                     release_label <= Sync::ReadReferenceClock(),
                 "clock write with writeback and interrupt lost its data");
 
@@ -3163,7 +3164,7 @@ public:
       graphics_gate_entered.release();
       graphics_gate_release.acquire();
     });
-    gpu.Submit(live_graphics_commands, {});
+    gpu.Submit(live_graphics_commands);
     graphics_gate_entered.acquire();
     live_graphics_commands[4] = 22;
     graphics_gate_release.release();
@@ -3240,7 +3241,7 @@ public:
     std::array<uint32_t, 5> no_interrupt_graphics_commands{};
     write_packet(no_interrupt_graphics_commands.data(),
                  &no_interrupt_graphics_value, 55);
-    gpu.Submit(no_interrupt_graphics_commands, {});
+    gpu.Submit(no_interrupt_graphics_commands);
     gpu.WaitForIdle();
     finish_gpu();
 
@@ -3280,7 +3281,7 @@ public:
     uint32_t graphics_interrupt_label = 0xa5a5a5a5u;
     auto graphics_interrupt_commands = make_interrupt_packet(
         1, 1, &graphics_interrupt_label, 0x11223344u, 0);
-    gpu.Submit(graphics_interrupt_commands, {});
+    gpu.Submit(graphics_interrupt_commands);
     gpu.WaitForIdle();
     finish_gpu();
 
@@ -3396,7 +3397,7 @@ public:
       stream_gate_entered.release();
       stream_gate_release.acquire();
     });
-    gpu.Submit(polling_commands, {});
+    gpu.Submit(polling_commands);
     stream_gate_entered.acquire();
     stream_gate_release.release();
     uint32_t packet_marker_a_at_callback = UINT32_MAX;
@@ -3447,7 +3448,7 @@ public:
     commands[14] = static_cast<uint32_t>(address(&suffix));
     commands[15] = static_cast<uint32_t>(address(&suffix) >> 32u);
     commands[16] = 22;
-      gpu.Submit(commands, {});
+      gpu.Submit(commands);
 
     std::binary_semaphore ordered_started{0};
     std::atomic<bool> ordered_finished{false};
@@ -3477,7 +3478,7 @@ public:
     label = 0;
     prefix = 0;
     suffix = 0;
-    gpu.Submit(commands, {});
+    gpu.Submit(commands);
 
     std::binary_semaphore unmap_complete{0};
     std::jthread unmap_thread([&] {
@@ -3618,7 +3619,7 @@ public:
     Require("GpuCommandLane", "DMA_DATA packet assembly",
             dma_cursor == dma_commands.size(),
             "DMA_DATA packet stream has the wrong size");
-    gpu.Submit(dma_commands, {});
+    gpu.Submit(dma_commands);
     gpu.WaitForIdle();
     constexpr uint32_t clean_fill_value = 0xdecafbad;
     gpu.SendCommandSync([&] {
@@ -10907,8 +10908,8 @@ public:
           return base + (wave_size == 64 ? 0x8000u : 0u) + 0x100u + phase * 0x2000u;
         };
         for (u32 sgpr = 0; sgpr < 16; ++sgpr)
-          shaders.SetCsUserSgpr(sgpr, 0, HW::UserSgprType::Unknown);
-        shaders.SetCsUserSgpr(8, 0x92u, HW::UserSgprType::Unknown);
+          shaders.SetCsUserSgpr(sgpr, 0);
+        shaders.SetCsUserSgpr(8, 0x92u);
         for (u32 phase = 0; phase < 3; ++phase) {
           const auto &code = phase == 1 ? writer : reader;
           shaders.SetCsShader({.data_addr = reinterpret_cast<uint64_t>(code.data()),
@@ -10920,7 +10921,7 @@ public:
           output.fields[3] = DstSel(4, 5, 6, 7) |
               (static_cast<u32>(Prospero::BufferFormat::k32UInt) << 12u);
           for (u32 i = 0; i < 4; ++i)
-            shaders.SetCsUserSgpr(12 + i, output.fields[i], HW::UserSgprType::Unknown);
+            shaders.SetCsUserSgpr(12 + i, output.fields[i]);
           ShaderComputeInputInfo input{};
           (void)context.GetPipelineCache().GetComputeProgram(
               shaders.GetCs(), processor.GetCtx().GetShaderRegisters(), input);
@@ -11012,7 +11013,7 @@ public:
       out.fields[3] = DstSel(4, 5, 6, 7) |
           (static_cast<u32>(Prospero::BufferFormat::k32UInt) << 12u);
       for (u32 i = 0; i < 4; ++i)
-        shaders.SetCsUserSgpr(i, out.fields[i], HW::UserSgprType::Unknown);
+        shaders.SetCsUserSgpr(i, out.fields[i]);
       uint64_t original_id = 0;
       struct Case { uint64_t address; u32 value; bool update; u32 field = 0; };
       for (const auto test : {Case{first, 41, false}, Case{first, 41, false},
@@ -11123,7 +11124,7 @@ public:
             }
             user_data[6] = active_lanes;
             for (u32 i = 0; i < user_data.size(); ++i)
-              shaders.SetCsUserSgpr(i, user_data[i], HW::UserSgprType::Unknown);
+              shaders.SetCsUserSgpr(i, user_data[i]);
             Require(name, "reset caller output", context.InvalidateMemory(output, wave_size * 4),
                     "caller output escaped mapped memory");
             std::array<float, 64> actual{};
@@ -11270,8 +11271,8 @@ public:
             out.fields[3] = DstSel(4, 5, 6, 7) |
                 (static_cast<u32>(Prospero::BufferFormat::k32UInt) << 12u) | (3u << 28u);
             for (u32 i = 0; i < 4; ++i) {
-              shaders.SetCsUserSgpr(i, input.fields[i], HW::UserSgprType::Unknown);
-              shaders.SetCsUserSgpr(i + 4, out.fields[i], HW::UserSgprType::Unknown);
+              shaders.SetCsUserSgpr(i, input.fields[i]);
+              shaders.SetCsUserSgpr(i + 4, out.fields[i]);
             }
             processor.DispatchDirect(1, 1, 1, wave == 32 ? 0x8041u : 0x41u);
             cache.ReadMemory(output, wave * sizeof(u32));
@@ -11381,11 +11382,9 @@ public:
               DstSel(4, 5, 6, 7) |
               (static_cast<u32>(Prospero::BufferFormat::k32UInt) << 12u);
           for (u32 i = 0; i < 4; ++i)
-            shaders.SetCsUserSgpr(i, output.fields[i],
-                                  HW::UserSgprType::Unknown);
+            shaders.SetCsUserSgpr(i, output.fields[i]);
           for (u32 i = 0; i < 3; ++i)
-            shaders.SetCsUserSgpr(4 + i, i == 2 ? count : groups[i],
-                                  HW::UserSgprType::Unknown);
+            shaders.SetCsUserSgpr(4 + i, i == 2 ? count : groups[i]);
           processor.DispatchDirect(groups[0], groups[1], groups[2],
                                    wave_size == 32 ? 0x8049u : 0x49u);
           cache.CopyBuffer(base + 63 * sizeof(u32), 0, sizeof(u32), false,
@@ -11542,8 +11541,7 @@ public:
         descriptor.fields[3] = DstSel(4, 5, 6, 7) |
             (static_cast<u32>(Prospero::BufferFormat::k32UInt) << 12u);
         for (u32 i = 0; i < 4; i++) {
-          shaders.SetCsUserSgpr(sgpr + i, descriptor.fields[i],
-                               HW::UserSgprType::Unknown);
+          shaders.SetCsUserSgpr(sgpr + i, descriptor.fields[i]);
         }
       };
       for (size_t index = 0; index < cases.size(); index++) {
@@ -11561,7 +11559,7 @@ public:
                                .wave_size = 64, .user_sgpr = 15});
           for (u32 i = 0; i < 3; i++) {
             set_buffer(i * 4u, args + i * 4u, 4);
-            shaders.SetCsUserSgpr(12u + i, test.dimensions[i], HW::UserSgprType::Unknown);
+            shaders.SetCsUserSgpr(12u + i, test.dimensions[i]);
           }
           processor.DispatchDirect(1, 1, 1, 0x41u);
         }
@@ -11640,8 +11638,7 @@ public:
                              .wave_size = 64, .user_sgpr = 15});
         for (u32 i = 0; i < 3; i++) {
           set_buffer(i * 4u, count_args + i * 4u, 4);
-          shaders.SetCsUserSgpr(12u + i, i == 0 ? count : 1u,
-                               HW::UserSgprType::Unknown);
+          shaders.SetCsUserSgpr(12u + i, i == 0 ? count : 1u);
         }
         processor.DispatchDirect(1, 1, 1, 0x41u);
         Require(name, "GPU-owned descriptor count", cache.HasGpuDirtyBytes(count_args, 4),
@@ -11730,8 +11727,8 @@ public:
                            .num_thread_x = 1, .num_thread_y = 1, .num_thread_z = 1,
                            .wave_size = 64, .user_sgpr = 2, .tgid_x_en = true,
                            .tgid_y_en = true, .tgid_z_en = true});
-      shaders.SetCsUserSgpr(0, static_cast<u32>(parameters), HW::UserSgprType::Unknown);
-      shaders.SetCsUserSgpr(1, static_cast<u32>(parameters >> 32u), HW::UserSgprType::Unknown);
+      shaders.SetCsUserSgpr(0, static_cast<u32>(parameters));
+      shaders.SetCsUserSgpr(1, static_cast<u32>(parameters >> 32u));
       const ShaderBufferResource table_buffer{{static_cast<u32>(table_address),
           static_cast<u32>(table_address >> 32u) | (148u << 16u), 2, 0x5204u}};
       LibKernel::Memory::WriteBacking(parameters, table_buffer.fields, sizeof(table_buffer.fields));
@@ -11860,7 +11857,7 @@ public:
                                .wave_size = 64, .user_sgpr = 15});
           for (u32 word = 0; word < 3u; ++word) {
             set_buffer(word * 4u, address + word * stride, 4u);
-            shaders.SetCsUserSgpr(12u + word, values[word], HW::UserSgprType::Unknown);
+            shaders.SetCsUserSgpr(12u + word, values[word]);
           }
           processor.DispatchDirect(1, 1, 1, 0x41u);
         };
@@ -11900,9 +11897,9 @@ public:
                                  .user_sgpr = 13, .tgid_x_en = true});
             set_buffer(0, record_keys, based ? 5u : 3u, based ? 8u : 12u);
             set_buffer(4, record_table, 2u, 192u);
-            if (based) shaders.SetCsUserSgpr(5, record_table >> 32u, HW::UserSgprType::Unknown);
+            if (based) shaders.SetCsUserSgpr(5, record_table >> 32u);
             set_buffer(8, record_output, wave * 2u, 8u);
-            shaders.SetCsUserSgpr(12, std::countr_zero(wave), HW::UserSgprType::Unknown);
+            shaders.SetCsUserSgpr(12, std::countr_zero(wave));
             processor.DispatchIndirect(record_args, 0x41u |
                 (wave == 32u ? 1u << Pm4::COMPUTE_DISPATCH_INITIATOR_CS_W32_EN_SHIFT : 0u));
             cache.ReadMemory(record_output, expected_output.size() * 4u);
@@ -12086,7 +12083,7 @@ public:
                                .wave_size = 64, .user_sgpr = 15});
           for (u32 axis = 0; axis < 3; axis++) {
             set_buffer(axis * 4, lds_args + axis * sizeof(u32), sizeof(u32));
-            shaders.SetCsUserSgpr(12 + axis, groups[axis], HW::UserSgprType::Unknown);
+            shaders.SetCsUserSgpr(12 + axis, groups[axis]);
           }
           processor.DispatchDirect(1, 1, 1, 0x41u);
           Require(name, "GPU-authored LDS dispatch arguments",
@@ -12421,7 +12418,7 @@ public:
               static_cast<uint32_t>(dcc_address >> 32u) | (4u << 16u),
               count, 0x00014004u, fill_case.fill, 0, 0x200, 0, count, 1};
           for (uint32_t i = 0; i < (goat ? 4u : user_data.size()); i++) {
-            shaders.SetCsUserSgpr(i, user_data[i], HW::UserSgprType::Unknown);
+            shaders.SetCsUserSgpr(i, user_data[i]);
           }
           executor.DispatchDirect(0, scheduler.Current(), (count + 63) / 64, 1, 1, 0x41u, false);
         };
@@ -12856,8 +12853,8 @@ public:
                            .num_thread_x = 2, .num_thread_y = 2, .num_thread_z = 1,
                            .wave_size = 64, .user_sgpr = 16, .tidig_comp_cnt = 1});
       for (u32 i = 0; i < 8; i++) {
-        shaders.SetCsUserSgpr(i, target.fields[i], HW::UserSgprType::Unknown);
-        shaders.SetCsUserSgpr(8u + i, depth_bits.fields[i], HW::UserSgprType::Unknown);
+        shaders.SetCsUserSgpr(i, target.fields[i]);
+        shaders.SetCsUserSgpr(8u + i, depth_bits.fields[i]);
       }
       processor.DispatchDirect(1, 1, 1, 0x41u);
 
@@ -12955,8 +12952,8 @@ public:
       const std::array<u32, 8> args{std::bit_cast<u32>(1.0f), 0, 0, std::bit_cast<u32>(1.0f),
                                     1, 1, 2, (2u << 16u) | 4u};
       for (u32 i = 0; i < 8; i++) {
-        shaders.SetCsUserSgpr(i, target.fields[i], HW::UserSgprType::Unknown);
-        shaders.SetCsUserSgpr(8u + i, args[i], HW::UserSgprType::Unknown);
+        shaders.SetCsUserSgpr(i, target.fields[i]);
+        shaders.SetCsUserSgpr(8u + i, args[i]);
       }
       processor.DispatchDirect(1, 1, 1, 0x41u);
       for (const int row : {1, 2, 3}) {
@@ -19149,8 +19146,8 @@ public:
       shaders.SetEsShaderBase(indirect_vs);
       shaders.SetPsShaderBase(pixel_address);
       shaders.SetGsShaderResource2({.user_sgpr = 2});
-      shaders.SetGsUserSgpr(0, 7, HW::UserSgprType::Unknown);
-      shaders.SetGsUserSgpr(1, 5, HW::UserSgprType::Unknown);
+      shaders.SetGsUserSgpr(0, 7);
+      shaders.SetGsUserSgpr(1, 5);
       user_config.SetPrimitiveType(Prospero::PrimitiveType::kTriList);
       for (const bool indexed : {false, true}) {
         TextureCacheTestAccess::ClearImage(cache, scheduler.Current(), sparse_color.image_id,
@@ -19237,8 +19234,7 @@ public:
                                 reinterpret_cast<uint64_t>(&attribute)};
         shaders.SetGsShaderResource2({.user_sgpr = 4});
         for (u32 i = 0; i < 4; i++) {
-          shaders.SetGsUserSgpr(i, static_cast<u32>(tables[i / 2] >> (i % 2 * 32)),
-                                HW::UserSgprType::Unknown);
+          shaders.SetGsUserSgpr(i, static_cast<u32>(tables[i / 2] >> (i % 2 * 32)));
         }
         const auto check = [&](const char *step, uint64_t vertex_shader, bool indexed, u32 first) {
           shaders.SetEsShaderBase(vertex_shader);
@@ -19306,7 +19302,7 @@ public:
       shaders.SetPsShaderBase(rect_ps);
       shaders.SetGsShaderResource2({.user_sgpr = 4});
       for (u32 i = 0; i < 4; i++) {
-        shaders.SetGsUserSgpr(i, rect_buffer.fields[i], HW::UserSgprType::Vsharp);
+        shaders.SetGsUserSgpr(i, rect_buffer.fields[i]);
       }
       registers.SetPsInControl(0x8001);
       registers.SetPsInputEna(2);
@@ -48474,6 +48470,12 @@ void CheckPm4NativeTargetGeometryRegisters(RenderContext &renderer) {
     legacy_slots_are_unhandled &= g_hw_sh_func[offset] == nullptr &&
                                   g_hw_sh_indirect_func[offset] == nullptr;
   }
+  // PS5 has no constant engine: WRITE_CONST_RAM, DUMP_CONST_RAM, the CE/DE
+  // counter increments and waits. RELEASE_MEM replaces EVENT_WRITE_EOP/EOS.
+  for (const uint32_t opcode :
+       {0x47u, 0x48u, 0x81u, 0x83u, 0x84u, 0x85u, 0x86u, 0x88u}) {
+    legacy_slots_are_unhandled &= g_cp_op_func[opcode] == nullptr;
+  }
   // Restoring shader state after Toolkit rendering still emits the compiler's
   // GS-front allocation metadata at 0xca.
   for (uint32_t offset = 0x0cbu; offset <= 0x0ebu; offset++) {
@@ -48507,7 +48509,8 @@ void CheckPm4NativeTargetGeometryRegisters(RenderContext &renderer) {
   Require("Pm4NativeTargetGeometry", "legacy register holes",
           legacy_slots_are_unhandled && native_pace_slots_are_handled &&
               native_ps_address_slots_are_handled && native_index_size_packet_complete,
-          "a removed GCN register has a handler or a native packet is not handled");
+          "a removed GCN register or PS4 packet has a handler or a native packet is "
+          "not handled");
   std::printf("[host]    %-32s ok\n", "Pm4NativeTargetGeometry");
 }
 
@@ -49283,8 +49286,8 @@ void CheckPm4DrawIndirectMultiPacket(RenderContext &renderer) {
             "indirect draw did not write the expected user SGPR offsets");
   };
   // These locations match the captured NGG prolog: user SGPR9/10 become s17/s18.
-  shaders.SetGsUserSgpr(9, 17821, HW::UserSgprType::Unknown);
-  shaders.SetGsUserSgpr(10, 0x898f3f24u, HW::UserSgprType::Unknown);
+  shaders.SetGsUserSgpr(9, 17821);
+  shaders.SetGsUserSgpr(10, 0x898f3f24u);
   arguments = {0, 1};
   std::array<uint32_t, 5> indexed_packet{
       KYTY_PM4(5, Pm4::IT_DRAW_INDEX_INDIRECT, 0), 0,
@@ -49595,25 +49598,18 @@ void CheckPm4IndirectControlFlow(RenderContext &renderer) {
           Gen5::AgcCbNop(reinterpret_cast<Gen5::CommandBuffer*>(&payload_dcb), 3) == payload.data() &&
               payload == std::array<uint32_t, 3>{0xc0011000u, 0x12345678u, 0x9abcdef0u},
           "NOP emitter overwrote the caller's reserved payload");
-  for (const uint32_t value : {0x68750820u, 0x68751777u, 0x68751004u}) {
+  // The PS4-era flip tags are payload too.
+  for (const uint32_t value : {0x68750820u, 0x68751777u, 0x68751004u,
+                               0x68750777u, 0x68750778u, 0x68750781u}) {
     std::array<uint32_t, 8> commands{KYTY_PM4(3, Pm4::IT_NOP, Pm4::R_ZERO), value, 0x12345678u};
     std::copy(completion.begin(), completion.end(), commands.begin() + 3);
-    processor.SetUserDataMarker(HW::UserSgprType::Unknown);
     selected = 0;
     Pm4Execution execution;
     Require(name, "opaque NOP payload",
             processor.Process(execution, commands) == Pm4ProcessResult::Complete && selected == 7 &&
-                processor.GetUserDataMarker() == HW::UserSgprType::Unknown && commands[1] == value,
-            "a NOP payload prefix executed a marker or blocked the following packet");
+                commands[1] == value,
+            "a NOP payload executed or blocked the following packet");
   }
-  const std::array<uint32_t, 2> vsharp_marker{
-      KYTY_PM4(2, Pm4::IT_NOP, Pm4::R_ZERO), 0x68750004u};
-  Pm4Execution marker_execution;
-  Require(name, "exact user-data marker",
-          processor.Process(marker_execution, vsharp_marker) == Pm4ProcessResult::Complete &&
-              processor.GetUserDataMarker() == HW::UserSgprType::Vsharp,
-          "exact marker dispatch lost the existing user-data annotation");
-  processor.SetUserDataMarker(HW::UserSgprType::Unknown);
   alignas(8) uint64_t released = 0;
   std::array<uint32_t, 20> disabled_commands{};
   const auto disabled_write = write(&returned, 99);
@@ -49634,7 +49630,7 @@ void CheckPm4IndirectControlFlow(RenderContext &renderer) {
               Gen5::AgcSetNop(disabled_commands.data() + 5) == 0 && Gen5::AgcSetNop(release) == 0 &&
               disabled_commands[0] == ((disabled_write[0] & 0xffff00ffu) | (Pm4::IT_NOP << 8u)) &&
               disabled_commands[5] == KYTY_PM4(2, Pm4::IT_NOP, Pm4::R_ZERO) &&
-              disabled_commands[6] == 0x123u &&
+              disabled_commands[6] == 0x68750123u &&
               release[0] == KYTY_PM4(8, Pm4::IT_NOP, Pm4::R_ZERO) &&
               unpatched_commands[7] == KYTY_PM4(8, Pm4::IT_NOP, Pm4::R_RELEASE_MEM) &&
               Gen5::AgcGetPacketSize(disabled_commands.data()) == disabled_write.size() &&
@@ -49644,7 +49640,7 @@ void CheckPm4IndirectControlFlow(RenderContext &renderer) {
                          unpatched_commands.begin() + 1) &&
               std::equal(disabled_commands.begin() + 8, disabled_commands.end(),
                          unpatched_commands.begin() + 8),
-          "SetNop changed a packet length, kept its operation or marker, or touched its payload");
+          "SetNop changed a packet length, kept its operation, or touched its payload");
   selected = returned = 0;
   Pm4Execution disabled_execution;
   Require(name, "SetNop execution",
@@ -49801,7 +49797,7 @@ void CheckWaitUntilSafeForRendering() {
   hold[3] = static_cast<uint32_t>(address(&gate) >> 32u);
   hold[4] = 1;
   hold[5] = UINT32_MAX;
-  gpu.Submit(hold, {});
+  gpu.Submit(hold);
   Require(name, "flip black",
           VideoOut::VideoOutSubmitFlip(handle, index_black, flip_mode_vsync, 0) == 0,
           "CPU flip failed");
@@ -49842,6 +49838,92 @@ void CheckWaitUntilSafeForRendering() {
 
   gpu.WaitForIdle();
   Require(name, "close", VideoOut::VideoOutClose(handle) == 0, "video-out close failed");
+  renderer.ShutdownGpu();
+  VideoOut::VideoOutShutdown();
+  std::printf("[host]    %-32s ok\n", name);
+}
+
+// R_FLIP itself publishes the dumped occlusion counters, then flips.
+void CheckPm4Flip() {
+  namespace EventQueue = LibKernel::EventQueue;
+  constexpr const char *name = "Pm4Flip";
+  Config::Load({.printf_direction = Config::LogDirection::Silent,
+                .occlusion_queries_enabled = true});
+  Require(name, "video", SDL_InitSubSystem(SDL_INIT_VIDEO),
+          "SDL video init failed");
+  WindowContext window;
+  window.graphic_ctx.screen_width = 64;
+  window.graphic_ctx.screen_height = 64;
+  window.window =
+      SDL_CreateWindow(name, 64, 64, SDL_WINDOW_VULKAN | SDL_WINDOW_HIDDEN);
+  Require(name, "window", window.window != nullptr,
+          "hidden Vulkan window failed");
+  window.CreateVulkan();
+  auto &video_out = VideoOut::VideoOutInit(64, 64, *window.presenter);
+  auto &renderer = *window.render_context;
+  renderer.InitializeGpu(&video_out);
+  auto &gpu = renderer.GetGpu();
+  Require(name, "occlusion queries", renderer.GetOcclusionQueries().Enabled(),
+          "the device has no host occlusion queries");
+
+  const int handle = VideoOut::VideoOutOpen(255, 0, 0, nullptr);
+  EventQueue::KernelEqueue flips = EventQueue::KERNEL_EQUEUE_INVALID;
+  uint32_t udata = 0;
+  Require(name, "events",
+          handle > 0 && EventQueue::KernelCreateEqueue(&flips, "flips") == 0 &&
+              VideoOut::VideoOutAddFlipEvent(flips, handle, &udata) == 0,
+          "video-out or flip event registration failed");
+  GraphicsInitJmpTables();
+
+  alignas(16) std::array<uint64_t, OCCLUSION_QUERY_DBS * 2> results{};
+  constexpr int64_t flip_arg = 0x777;
+  std::array<uint32_t, 14> commands{};
+  const auto dump = [&](size_t at, const uint64_t *counter) {
+    const auto address = reinterpret_cast<uint64_t>(counter);
+    commands[at] = KYTY_PM4(4, Pm4::IT_EVENT_WRITE, Pm4::R_ZERO);
+    commands[at + 1] = 0x139u;
+    commands[at + 2] = static_cast<uint32_t>(address);
+    commands[at + 3] = static_cast<uint32_t>(address >> 32u);
+  };
+  // Begin and end z-pass dumps, then a vsync flip of the blank buffer.
+  dump(0, &results[0]);
+  dump(4, &results[1]);
+  commands[8] = KYTY_PM4(6, Pm4::IT_NOP, Pm4::R_FLIP);
+  commands[9] = static_cast<uint32_t>(handle);
+  commands[10] = static_cast<uint32_t>(-1);
+  commands[11] = 1;
+  commands[12] = flip_arg;
+  bool complete = false;
+  bool published = true;
+  gpu.SendCommandSync([&] {
+    CommandProcessor processor(renderer, 0);
+    processor.BufferInit();
+    Pm4Execution execution;
+    complete =
+        processor.Process(execution, commands) == Pm4ProcessResult::Complete;
+    for (const auto counter : results) {
+      published &= (counter & OCCLUSION_QUERY_READY) != 0;
+    }
+    processor.BufferFlush();
+  });
+
+  EventQueue::KernelEvent event{};
+  int count = 0;
+  LibKernel::KernelUseconds timeout = 2'000'000;
+  int64_t flipped_arg = -1;
+  Require(name, "flip",
+          complete && published &&
+              EventQueue::KernelWaitEqueue(flips, &event, 1, &count,
+                                           &timeout) == 0 &&
+              count == 1 &&
+              VideoOut::VideoOutGetEventData(&event, &flipped_arg) == 0 &&
+              flipped_arg == flip_arg,
+          "R_FLIP did not publish the occlusion counters or flip");
+
+  gpu.WaitForIdle();
+  Require(name, "close", VideoOut::VideoOutClose(handle) == 0,
+          "video-out close failed");
+  EventQueue::KernelDeleteEqueue(flips);
   renderer.ShutdownGpu();
   VideoOut::VideoOutShutdown();
   std::printf("[host]    %-32s ok\n", name);
@@ -50006,58 +50088,6 @@ void CheckPm4RewindResume(RenderContext &renderer) {
     }
   }
   std::printf("[host]    %-32s ok\n", name);
-}
-
-void CheckPm4CeCompletion(RenderContext &renderer) {
-  GraphicsInitJmpTables();
-  CommandProcessor processor(renderer, 0);
-  uint32_t suffix = 0;
-  const auto address = reinterpret_cast<uint64_t>(&suffix);
-
-  std::array<uint32_t, 9> commands{};
-  commands[0] = 0xc0008600u;
-  commands[1] = 1;
-  commands[2] = 0xc0008500u;
-  commands[3] = 0;
-  commands[4] = KYTY_PM4(5, Pm4::IT_WRITE_DATA, 0);
-  commands[5] = 0;
-  commands[6] = static_cast<uint32_t>(address);
-  commands[7] = static_cast<uint32_t>(address >> 32u);
-  commands[8] = 33;
-
-  processor.ResetDeCe();
-  Pm4Execution execution;
-  Require("Pm4CeCompletion", "wait",
-          processor.Process(execution, commands) == Pm4ProcessResult::Blocked &&
-              suffix == 0,
-          "DE did not wait for an active CE stream");
-
-  std::array<uint32_t, 2> ce_increment{0xc0008400u, 1};
-  Pm4Execution ce_execution;
-  Require("Pm4CeCompletion", "CE increment",
-          processor.Process(ce_execution, ce_increment) ==
-              Pm4ProcessResult::Complete,
-          "CE counter increment did not complete");
-  Require(
-      "Pm4CeCompletion", "counter gate",
-      processor.Process(execution, commands) == Pm4ProcessResult::Complete &&
-          suffix == 33,
-      "DE did not resume after CE advanced or failed to increment its counter");
-
-  suffix = 0;
-  Pm4Execution balanced_execution;
-  Require("Pm4CeCompletion", "balanced wait",
-          processor.Process(balanced_execution, commands) ==
-                  Pm4ProcessResult::Blocked &&
-              suffix == 0,
-          "balanced CE/DE counters did not gate the next DE packet");
-  processor.SetCeComplete(true);
-  Require("Pm4CeCompletion", "stream complete",
-          processor.Process(balanced_execution, commands) ==
-                  Pm4ProcessResult::Complete &&
-              suffix == 33,
-          "DE remained blocked after the CE stream completed");
-  std::printf("[host]    %-32s ok\n", "Pm4CeCompletion");
 }
 
 } // namespace
@@ -50744,6 +50774,10 @@ int main(int argc, char **argv) {
     CheckWaitUntilSafeForRendering();
     return 0;
   }
+  if (argc == 2 && std::strcmp(argv[1], "--flip-only") == 0) {
+    CheckPm4Flip();
+    return 0;
+  }
   if (argc == 2 && std::strcmp(argv[1], "--gpu-command-lane-only") == 0) {
     VulkanHarness vulkan;
     vulkan.CheckGpuCommandLane();
@@ -50752,7 +50786,6 @@ int main(int argc, char **argv) {
     CheckPm4IndirectControlFlow(vulkan.RuntimeRenderer());
     CheckPm4WaitResume(vulkan.RuntimeRenderer());
     CheckPm4RewindResume(vulkan.RuntimeRenderer());
-    CheckPm4CeCompletion(vulkan.RuntimeRenderer());
     return 0;
   }
   if (argc == 2 && std::strcmp(argv[1], "--suspend-point-only") == 0) {
@@ -51221,7 +51254,6 @@ int main(int argc, char **argv) {
   CheckPm4IndirectControlFlow(vulkan.RuntimeRenderer());
   CheckPm4WaitResume(vulkan.RuntimeRenderer());
   CheckPm4RewindResume(vulkan.RuntimeRenderer());
-  CheckPm4CeCompletion(vulkan.RuntimeRenderer());
   CheckEmbeddedFetchVertexOffset();
   CheckEmbeddedFetchLaneSpill();
   CheckTessellationPrograms();

@@ -133,8 +133,6 @@ uint32_t CpOpWriteData(CommandProcessor&, uint32_t, const uint32_t*, uint32_t, u
 uint32_t CpOpIndirectBuffer(CommandProcessor&, uint32_t, const uint32_t*, uint32_t, uint32_t);
 uint32_t CpOpCopyData(CommandProcessor&, uint32_t, const uint32_t*, uint32_t, uint32_t);
 uint32_t CpOpEventWrite(CommandProcessor&, uint32_t, const uint32_t*, uint32_t, uint32_t);
-uint32_t CpOpEventWriteEop(CommandProcessor&, uint32_t, const uint32_t*, uint32_t, uint32_t);
-uint32_t CpOpEventWriteEos(CommandProcessor&, uint32_t, const uint32_t*, uint32_t, uint32_t);
 uint32_t CpOpDmaData(CommandProcessor&, uint32_t, const uint32_t*, uint32_t, uint32_t);
 uint32_t CpOpAcquireMem(CommandProcessor&, uint32_t, const uint32_t*, uint32_t, uint32_t);
 uint32_t CpOpSetContextReg(CommandProcessor&, uint32_t, const uint32_t*, uint32_t, uint32_t);
@@ -143,12 +141,6 @@ uint32_t CpOpSetUconfigReg(CommandProcessor&, uint32_t, const uint32_t*, uint32_
 uint32_t CpOpIndirectCxRegs(CommandProcessor&, uint32_t, const uint32_t*, uint32_t, uint32_t);
 uint32_t CpOpIndirectShRegs(CommandProcessor&, uint32_t, const uint32_t*, uint32_t, uint32_t);
 uint32_t CpOpIndirectUcRegs(CommandProcessor&, uint32_t, const uint32_t*, uint32_t, uint32_t);
-uint32_t CpOpWriteConstRam(CommandProcessor&, uint32_t, const uint32_t*, uint32_t, uint32_t);
-uint32_t CpOpDumpConstRam(CommandProcessor&, uint32_t, const uint32_t*, uint32_t, uint32_t);
-uint32_t CpOpIncrementCeCounter(CommandProcessor&, uint32_t, const uint32_t*, uint32_t, uint32_t);
-uint32_t CpOpIncrementDeCounter(CommandProcessor&, uint32_t, const uint32_t*, uint32_t, uint32_t);
-uint32_t CpOpWaitOnCeCounter(CommandProcessor&, uint32_t, const uint32_t*, uint32_t, uint32_t);
-uint32_t CpOpWaitOnDeCounterDiff(CommandProcessor&, uint32_t, const uint32_t*, uint32_t, uint32_t);
 uint32_t CpOpGetLodStats(CommandProcessor&, uint32_t, const uint32_t*, uint32_t, uint32_t);
 uint32_t CpOpDispatchReset(CommandProcessor&, uint32_t, const uint32_t*, uint32_t, uint32_t);
 uint32_t CpOpWaitRegMem32(CommandProcessor&, uint32_t, const uint32_t*, uint32_t, uint32_t);

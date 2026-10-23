@@ -3510,13 +3510,7 @@ int KYTY_SYSV_ABI AgcSetPacketPredication(uint32_t* packet, uint32_t predication
 int KYTY_SYSV_ABI AgcSetNop(uint32_t* packet) {
 	PRINT_NAME();
 
-	const auto size = AgcGetPacketSize(packet);
-
 	packet[0] = (packet[0] & 0xffff0003u) | (Pm4::IT_NOP << 8u);
-	// Prevent the disabled payload from being treated as an executable marker.
-	if (size > 1 && (packet[1] & 0xffff0000u) == 0x68750000u) {
-		packet[1] &= 0xffffu;
-	}
 
 	return OK;
 }
@@ -3793,9 +3787,6 @@ int KYTY_SYSV_ABI AgcQueueEndOfPipeActionPatchAddress(uint32_t*             cmd,
 	    op == Pm4::IT_RELEASE_MEM) {
 		cmd[3] = static_cast<uint32_t>(vaddr & 0xffffffffu);
 		cmd[4] = static_cast<uint32_t>((vaddr >> 32u) & 0xffffffffu);
-	} else if (op == Pm4::IT_EVENT_WRITE_EOP) {
-		cmd[2] = static_cast<uint32_t>(vaddr & 0xffffffffu);
-		cmd[3] = (cmd[3] & 0xffff0000u) | static_cast<uint32_t>((vaddr >> 32u) & 0xffffu);
 	} else {
 		EXIT("unsupported queueEndOfPipeAction packet for address patch: 0x%08" PRIx32 "\n",
 		     cmd[0]);
@@ -4115,7 +4106,7 @@ static TessellationDriverState g_tessellation_driver_state {};
 static void submit_dcb(uint32_t* dcb, uint32_t size_in_dwords) {
 	GraphicsDbgDumpDcb("d", size_in_dwords, dcb);
 	EXIT_IF(g_renderer == nullptr);
-	g_renderer->GetGpu().Submit(std::span {dcb, size_in_dwords}, {});
+	g_renderer->GetGpu().Submit(std::span {dcb, size_in_dwords});
 }
 
 int KYTY_SYSV_ABI AgcDriverSubmitDcb(const Packet* packet) {
