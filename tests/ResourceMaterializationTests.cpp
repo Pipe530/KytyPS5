@@ -7,6 +7,12 @@
 #include <limits>
 #include <memory>
 
+#if defined(__linux__)
+#include <csignal>
+#include <sys/mman.h>
+#include <ucontext.h>
+#endif
+
 namespace {
 
 void Check(bool value, const char *text) {
@@ -227,6 +233,24 @@ void TestNativeNestedSrtRefresh() {
                   std::vector<uint32_t>{(*data)[1], table[0], table[1], (*data)[2]},
           "native SRT refresh lost pointer masking, alignment, or current values");
   }
+#if defined(__linux__)
+  struct sigaction action {}, previous {};
+  action.sa_sigaction = +[](int, siginfo_t *, void *context) {
+    auto &registers = static_cast<ucontext_t *>(context)->uc_mcontext.gregs;
+    const auto length = SrtWalkerLoadLength(static_cast<uint64_t>(registers[REG_RIP]));
+    if (length == 0) std::abort();
+    registers[REG_RAX] = 0;
+    registers[REG_RIP] += length;
+  };
+  action.sa_flags = SA_SIGINFO;
+  auto *page = mmap(nullptr, 4096, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  Check(page != MAP_FAILED && sigaction(SIGSEGV, &action, &previous) == 0 &&
+            MaterializeResources(plan, {.user_data = pointer_words(page)}, snapshot, specialization) &&
+            snapshot.flattened_srt == std::vector<uint32_t>(4, 0u),
+        "faulting walker loads of a table and a null pointer did not read zero");
+  sigaction(SIGSEGV, &previous, nullptr);
+  munmap(page, 4096);
+#endif
   Check(!MaterializeResources(plan, {.user_data = std::span(user_data).first(1)},
                               snapshot, specialization),
         "native SRT walk accepted truncated user data");

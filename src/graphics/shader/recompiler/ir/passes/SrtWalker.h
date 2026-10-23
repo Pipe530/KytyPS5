@@ -79,6 +79,9 @@ bool ValidateRuntimeValue(const ResourcePlan& program, Value value,
 // This does not imply that the host can evaluate the value.
 bool ValidateWaveUniformValue(const ResourcePlan& program, Value value);
 void CompileSrtWalker(ResourcePlan& program);
+// Length of the guest load at rip if it belongs to the walker running on this thread, else 0.
+// The exception handler completes such a load as a zero read.
+uint32_t SrtWalkerLoadLength(uint64_t rip);
 // Uses the strict reader for values that affect shader specialization.
 SrtRuntime CleanRuntime(SrtRuntime runtime);
 

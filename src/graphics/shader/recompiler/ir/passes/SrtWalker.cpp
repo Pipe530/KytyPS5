@@ -176,6 +176,14 @@ bool IsRuntimeUniformOp(ValueOpcode op) {
 	}
 }
 
+thread_local const Xbyak::CodeGenerator* t_running_walker = nullptr;
+
+// Every guest load is mov eax, [r10] (41 8b 02), so a fault completes it as a zero read.
+void LoadGuest(Xbyak::CodeGenerator& code, const Xbyak::RegExp& address) {
+	code.lea(code.r10, code.ptr[address]);
+	code.mov(code.eax, code.dword[code.r10]);
+}
+
 class RuntimeValidator {
 public:
 	explicit RuntimeValidator(const ResourcePlan& program, RuntimeValueType type,
@@ -449,8 +457,13 @@ void CompileSrtWalker(ResourcePlan& program) {
 	// descend through its child pointers. Seed the descriptor evaluator's memo.
 	const auto visit = [&](auto&& self, int32_t pointer_offset, const Reads& reads) -> void {
 		code.push(code.rdi);
-		code.mov(code.rdi, code.qword[code.rdi + pointer_offset]);
-		code.and_(code.rdi, code.r9);
+		LoadGuest(code, code.rdi + pointer_offset + 4);
+		code.shl(code.rax, 32);
+		code.mov(code.r11, code.rax);
+		LoadGuest(code, code.rdi + pointer_offset);
+		code.or_(code.rax, code.r11);
+		code.and_(code.rax, code.r9);
+		code.mov(code.rdi, code.rax);
 		const auto first = reads.begin()->first;
 		const auto last = reads.rbegin()->first;
 		if (first < 0) {
@@ -467,9 +480,9 @@ void CompileSrtWalker(ResourcePlan& program) {
 			const auto index = read->value.ResolveInstruction()->EvaluationIndex(program.evaluation_value_count);
 			using Entry = ResourcePlan::EvaluationContext::Entry;
 			const auto slot = code.rdx + index * sizeof(Entry);
-			code.mov(code.r10d, code.dword[code.rdi + offset]);
-			code.mov(code.dword[code.rsi + read->flat_offset * sizeof(uint32_t)], code.r10d);
-			code.mov(code.qword[slot + offsetof(Entry, value)], code.r10);
+			LoadGuest(code, code.rdi + offset);
+			code.mov(code.dword[code.rsi + read->flat_offset * sizeof(uint32_t)], code.eax);
+			code.mov(code.qword[slot + offsetof(Entry, value)], code.rax);
 			code.mov(code.qword[slot + offsetof(Entry, generation)], code.rcx);
 		}
 		for (const auto& [offset, read]: reads) {
@@ -1146,8 +1159,11 @@ bool SrtWalker::RefreshFlatBuffer(std::vector<uint32_t>& flat) {
 		m_context.values.resize(m_program.evaluation_value_count);
 		using Walker = bool KYTY_SYSV_ABI (*)(const uint32_t*, uint32_t*,
 		    ResourcePlan::EvaluationContext::Entry*, uint64_t, size_t);
-		return m_program.srt_code->getCode<Walker>()(m_runtime.user_data.data(), flat.data(),
+		t_running_walker = m_program.srt_code.get();
+		const bool walked = m_program.srt_code->getCode<Walker>()(m_runtime.user_data.data(), flat.data(),
 		    m_context.values.data(), m_context.generation, m_runtime.user_data.size());
+		t_running_walker = nullptr;
+		return walked;
 	}
 	const auto refresh = [&](uint32_t slot) {
 		if (slot >= m_program.srt_reads.size()) return false;
@@ -1228,5 +1244,12 @@ bool ValidateWaveUniformValue(const ResourcePlan& program, Value value) {
 	return RuntimeValidator(program, RuntimeValueType::Any, true).Run(value);
 }
 
+uint32_t SrtWalkerLoadLength(uint64_t rip) {
+	if (t_running_walker == nullptr ||
+	    rip - reinterpret_cast<uint64_t>(t_running_walker->getCode()) >= t_running_walker->getSize())
+		return 0;
+	const auto* code = reinterpret_cast<const uint8_t*>(rip);
+	return code[0] == 0x41u && code[1] == 0x8bu && code[2] == 0x02u ? 3 : 0;
+}
 
 } // namespace Libs::Graphics::ShaderRecompiler::IR
