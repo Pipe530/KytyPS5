@@ -2049,6 +2049,36 @@ void TestDirectReleaseContracts() {
 	          free_offset, SceKernelPageSize) == Libs::LibKernel::KERNEL_ERROR_ENOENT,
 	      "checked release did not report an unallocated range");
 
+	// An unchecked release frees the allocated parts on both sides of a gap.
+	const auto page = static_cast<int64_t>(SceKernelPageSize);
+	for (const auto offset: {free_offset - page * 3, free_offset - page}) {
+		int64_t allocated = 0;
+		CheckOk(test,
+		        Libs::LibKernel::Memory::KernelAllocateDirectMemory(
+		            offset, offset + page, SceKernelPageSize, SceKernelPageSize, SceKernelMtypeC,
+		            &allocated),
+		        "KernelAllocateDirectMemory(around a gap)");
+		Check(test, allocated == offset, "allocation did not land at its fixed offset");
+	}
+	for (const auto [offset, len]:
+	     {std::pair {free_offset - page * 3, page * 3}, {free_offset - page, page * 2}}) {
+		void* mapping = nullptr;
+		Check(test,
+		      Libs::LibKernel::Memory::KernelMapDirectMemory(&mapping, len, SceKernelProtCpuRw, 0,
+		                                                     offset, SceKernelPageSize) ==
+		          Libs::LibKernel::KERNEL_ERROR_ENOMEM,
+		      "direct map accepted a gap or the unallocated tail");
+	}
+	CheckOk(test,
+	        Libs::LibKernel::Memory::KernelReleaseDirectMemory(free_offset - page * 3, page * 3),
+	        "KernelReleaseDirectMemory(over a gap)");
+	for (const auto offset: {free_offset - page * 3, free_offset - page}) {
+		Check(test,
+		      Libs::LibKernel::Memory::KernelCheckedReleaseDirectMemory(offset, page) ==
+		          Libs::LibKernel::KERNEL_ERROR_ENOENT,
+		      "unchecked release left an allocation around a gap");
+	}
+
 	std::printf("[host]    %-48s ok\n", test);
 }
 
@@ -3127,6 +3157,14 @@ void TestAutomaticMemoryFragmentedMapRollback() {
 	            "automatic allocation while second donation remains aliased");
 	CheckOk(test, KernelMunmap(reinterpret_cast<uint64_t>(alias), block * 2),
 	        "unmap mixed ownership alias");
+	CheckOk(
+	    test,
+	    KernelMapDirectMemory(&alias, block * 2, SceKernelProtCpuRw, SceKernelMapFixed, gap, block),
+	    "alias over a free donation behind ordinary ownership");
+	CheckFailed(test, MapAutomaticMemory(base, block * 2, SceKernelMtypeC, SceKernelProtCpuRw),
+	            "automatic allocation of a donation claimed by a new alias");
+	CheckOk(test, KernelMunmap(reinterpret_cast<uint64_t>(alias), block * 2),
+	        "unmap claiming alias");
 	CheckFailed(test, MapAutomaticMemory(base, block * 3, SceKernelMtypeC, SceKernelProtCpuRw),
 	            "automatic allocation beyond donated capacity");
 	CheckOk(test, MapAutomaticMemory(base, block * 2, SceKernelMtypeC, SceKernelProtCpuRw),
