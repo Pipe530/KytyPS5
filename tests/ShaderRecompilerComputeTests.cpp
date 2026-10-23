@@ -193,6 +193,8 @@ struct BufferCacheTestAccess {
     return cache.SynchronizeBufferFromImage(buffer, address, size);
   }
 
+  static std::mutex &BdaSyncMutex(BufferCache &cache) { return cache.m_bda_sync_mutex; }
+
   static BufferId PageOwner(const BufferCache &cache, uint64_t address) {
     const auto *owner = cache.m_page_table.Find(
         address >> BufferCache::PageTable::kPageBits);
@@ -5596,10 +5598,18 @@ public:
     constexpr const char *name = "BdaSyncUploads";
     constexpr auto page = BufferCache::CACHING_PAGESIZE;
     EnsureRuntimeContext();
-    const auto base = LibKernel::Memory::AllocateRuntimeMemory(
-        0, 3 * page, Common::VirtualMemory::Mode::ReadWrite, "bda_sync_uploads");
-    Require(name, "allocation", base != 0, "guest allocation failed");
-    auto *words = reinterpret_cast<u32 *>(base);
+    // Direct memory, so readbacks can publish GPU-dirty bytes.
+    int64_t direct = -1;
+    void *mapped = nullptr;
+    Require(name, "allocation",
+            LibKernel::Memory::KernelAllocateDirectMemory(
+                0, LibKernel::Memory::KernelGetDirectMemorySize(), 3 * page, page, 0, &direct) ==
+                    0 &&
+                LibKernel::Memory::KernelMapDirectMemory(&mapped, 3 * page, 0x3, 0, direct, page) ==
+                    0,
+            "guest allocation failed");
+    const auto base = reinterpret_cast<uint64_t>(mapped);
+    auto *words = static_cast<u32 *>(mapped);
     std::fill_n(words, 3 * page / sizeof(u32), 0x12345678u);
     RenderContext context(m_runtime_context);
     auto &scheduler = context.GetCommandScheduler();
@@ -5608,6 +5618,7 @@ public:
     HW::UserConfig user_config{};
     HW::Shader shaders{};
     scheduler.Begin(registers, user_config, shaders);
+    context.InitializeGpu(nullptr);
     context.MapMemory(base, page);
     context.MapMemory(base + 2 * page, page);
     const auto id = cache.FindBuffer(base, 3 * page);
@@ -5650,6 +5661,34 @@ public:
     context.PrepareBda();
     snapshot(2 * page, 5);
 
+    // A write fault on GPU-dirty memory flushes it on the GPU thread, which must queue the page
+    // itself: the faulting thread can resume only after later commands.
+    (void)cache.ObtainBuffer(base + 20, sizeof(u32), true, false);
+    std::unique_lock queue_lock(BufferCacheTestAccess::BdaSyncMutex(cache));
+    std::jthread fault([&] { cache.InvalidateMemory(base + 20, sizeof(u32)); });
+    while (!cache.IsRegionCpuModified(base, TRACKER_PAGE_SIZE)) {
+      std::this_thread::yield();
+    }
+    std::binary_semaphore later_command{0};
+    context.GetGpu().SendCommand([&] { later_command.release(); });
+    Require(name, "flush queue order",
+            !later_command.try_acquire_for(std::chrono::milliseconds(100)),
+            "a GPU command ran before the write-fault flush queued its page");
+    queue_lock.unlock();
+    fault.join();
+    later_command.acquire();
+
+    // Garbage collection untracks a clean buffer; its replacement queues the range on Register.
+    BufferCacheTestAccess::SetGarbageCollectionThresholds(
+        cache, 0, std::numeric_limits<uint64_t>::max());
+    cache.RunGarbageCollector();
+    Require(name, "clean eviction", !cache.IsRegionRegistered(base, 3 * page),
+            "garbage collection kept the clean buffer");
+    (void)cache.FindBuffer(base, 3 * page);
+    context.PrepareBda();
+    Require(name, "replacement upload", !cache.IsRegionCpuModified(base, 3 * page),
+            "a buffer replacing an evicted one did not upload its untracked pages");
+
     vk::BufferMemoryBarrier barrier{};
     barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
     barrier.dstAccessMask = vk::AccessFlagBits::eHostRead;
@@ -5666,7 +5705,9 @@ public:
     context.UnmapMemory(base, 3 * page);
     scheduler.Finish();
     DestroyBuffer(&readback);
-    Require(name, "release", LibKernel::Memory::FreeGuestMemory(base, 3 * page),
+    Require(name, "release",
+            LibKernel::Memory::KernelMunmap(base, 3 * page) == 0 &&
+                LibKernel::Memory::KernelReleaseDirectMemory(direct, 3 * page) == 0,
             "guest allocation release failed");
     std::printf("[gpu]     %-32s ok\n", name);
   }
