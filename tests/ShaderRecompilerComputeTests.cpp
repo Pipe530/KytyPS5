@@ -21246,8 +21246,10 @@ private:
     available_min_lod.pNext = &available_provoking_vertex;
     vk::PhysicalDeviceMaintenance8FeaturesKHR available_maintenance8{};
     available_maintenance8.pNext = &available_min_lod;
+    vk::PhysicalDeviceShaderClockFeaturesKHR available_clock{};
+    available_clock.pNext = &available_maintenance8;
     vk::PhysicalDeviceRobustness2FeaturesEXT available_robustness2{};
-    available_robustness2.pNext = &available_maintenance8;
+    available_robustness2.pNext = &available_clock;
     vk::PhysicalDeviceFeatures2 available_features2{};
     available_features2.sType = vk::StructureType::ePhysicalDeviceFeatures2;
     available_features2.pNext = &available_robustness2;
@@ -21295,6 +21297,8 @@ private:
             "image view minimum LOD is not supported");
     Require("VulkanHarness", "dispatch", available_maintenance8.maintenance8 == true,
             "maintenance8 dynamic image offsets are not supported");
+    Require("VulkanHarness", "dispatch", available_clock.shaderDeviceClock == true,
+            "shader device clock is not supported");
     Require("VulkanHarness", "graphics", available_features12.shaderOutputLayer == true,
             "vertex layer output is not supported");
     m_rasterization_supported = available_features.fillModeNonSolid &&
@@ -21377,7 +21381,10 @@ private:
                         : static_cast<void *>(&derivatives);
     vk::PhysicalDeviceMaintenance8FeaturesKHR maintenance8{};
     maintenance8.maintenance8 = true;
-    maintenance8.pNext = &min_lod;
+    vk::PhysicalDeviceShaderClockFeaturesKHR shader_clock{};
+    shader_clock.shaderDeviceClock = true;
+    shader_clock.pNext = &min_lod;
+    maintenance8.pNext = &shader_clock;
     vk::PhysicalDeviceRobustness2FeaturesEXT robustness2{};
     robustness2.nullDescriptor = true;
     robustness2.pNext = &maintenance8;
@@ -21406,6 +21413,7 @@ private:
         VK_EXT_SHADER_IMAGE_ATOMIC_INT64_EXTENSION_NAME,
         VK_EXT_ROBUSTNESS_2_EXTENSION_NAME,
         VK_KHR_MAINTENANCE_8_EXTENSION_NAME,
+        VK_KHR_SHADER_CLOCK_EXTENSION_NAME,
         VK_EXT_IMAGE_VIEW_MIN_LOD_EXTENSION_NAME,
         VK_EXT_CONDITIONAL_RENDERING_EXTENSION_NAME};
     if (m_rasterization_supported) {
@@ -31970,29 +31978,60 @@ TestCase ScalarBranchRestoresInactiveLanes(u32 wave_size, u32 threads, bool uppe
   return test;
 }
 
-TestCase ScalarMemRealtimeCapturedPlaceholder() {
+// Each case spins until S_MEMREALTIME advances 64 ticks, capped at 2^20 reads, and stores
+// min(delta, 64). The profile period picks the host clock shift.
+std::vector<TestCase> ScalarMemRealtimeCases() {
   using O = ShaderOpcode;
   namespace D = ShaderRecompiler::Decoder;
 
   std::vector<u32> code = {0xf4940300u, 0xfa000000u};
   D::Instruction decoded;
   D::DecodeInstruction(code, 0, decoded);
-  Require("ScalarMemRealtimeCapturedPlaceholder", "decode",
+  Require("ScalarMemRealtimeCases", "decode",
           decoded.opcode == O::S_MEMREALTIME && decoded.word_count == 2 &&
               decoded.dst.kind == D::OperandKind::Sgpr && decoded.dst.reg == 12 &&
               decoded.data_dwords == 2 && decoded.src_count == 0 &&
               decoded.src0.kind == D::OperandKind::Unknown &&
               decoded.src1.kind == D::OperandKind::Unknown,
           "captured clock instruction must write s12:s13 without memory operands");
-  AppendStoreSgprPair(&code, 12, 0);
-  code.insert(code.end(), {0xf4940300u, 0xfa000000u});
-  AppendStoreSgprPair(&code, 12, 2);
+  code.insert(code.end(),
+              {EncodeSop1(0x03, 17, InlineU32(0)),          // s_mov_b32 s17, 0
+               0xf4940380u, 0xfa000000u,                    // loop: s_memrealtime s[14:15]
+               EncodeSop2(0x01, 16, 14, 12),                // s_sub_u32 s16, s14, s12
+               EncodeSop2(0x00, 17, 17, InlineU32(1)),      // s_add_u32 s17, s17, 1
+               EncodeSopc(0x09, 16, InlineU32(64)),         // s_cmp_ge_u32 s16, 64
+               EncodeSopp(0x05, 3),                         // s_cbranch_scc1 done
+               EncodeSopc(0x0a, 17, 255), 1u << 20,         // s_cmp_lt_u32 s17, 1 << 20
+               EncodeSopp(0x05, static_cast<u32>(-9)),      // s_cbranch_scc1 loop
+               EncodeSop2(0x07, 16, 16, InlineU32(64))});   // done: s_min_u32 s16, s16, 64
+  AppendStoreSgpr(&code, 16, 0);
   AppendEnd(&code);
-  return {"ScalarMemRealtimeCapturedPlaceholder",
-          code,
-          {},
-          {UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX},
-          {O::S_MEMREALTIME, O::V_MOV_B32, O::BUFFER_STORE_DWORD, O::S_ENDPGM}};
+
+  static const struct {
+    const char *name;
+    ShaderProfile profile;
+    std::vector<std::string> required, forbidden;
+  } variants[] = {
+      {"ScalarMemRealtimeShiftsNanosecondClock",
+       {.maintenance8 = true, .device_clock_period_ps = 1000},
+       {"OpShiftRightLogical %ulong", "%uint_3\n"},
+       {}},
+      {"ScalarMemRealtimeKeeps100MHzClock",
+       {.maintenance8 = true, .device_clock_period_ps = 10000},
+       {"OpReadClockKHR %ulong %uint_1"},
+       {"OpShiftRightLogical %ulong"}}};
+  std::vector<TestCase> tests;
+  for (const auto &variant : variants) {
+    TestCase test{variant.name, code, {}, {64},
+                  {O::S_MEMREALTIME, O::S_MOV_B32, O::S_SUB_U32, O::S_ADD_U32, O::S_CMP_GE_U32,
+                   O::S_CBRANCH_SCC1, O::S_CMP_LT_U32, O::S_MIN_U32, O::V_MOV_B32,
+                   O::BUFFER_STORE_DWORD, O::S_ENDPGM}};
+    test.profile = &variant.profile;
+    test.required_spirv = variant.required;
+    test.forbidden_spirv = variant.forbidden;
+    tests.push_back(std::move(test));
+  }
+  return tests;
 }
 
 TestCase ScalarMemoryLoadVariants() {
@@ -44047,7 +44086,9 @@ std::vector<TestCase> MakeCases() {
   AddCase([] { return ScalarBranchRestoresInactiveLanes(32, 32, true); });
   AddCase([] { return ScalarBranchRestoresInactiveLanes(64, 64, true); });
   AddCase(BranchVccnzUsesCarryProducedWaveMask);
-  AddCase(ScalarMemRealtimeCapturedPlaceholder);
+  for (auto &test : ScalarMemRealtimeCases()) {
+    cases.push_back(std::move(test));
+  }
   AddCase(ScalarMemoryLoadVariants);
   AddCase(ScalarBufferOffsetAlignmentAndCarry);
   AddCase(ScalarLoadSignedImmediateOffsetAddsSoffset);
@@ -50124,7 +50165,9 @@ int main(int argc, char **argv) {
   }
   if (argc == 2 && std::strcmp(argv[1], "--s-memrealtime-only") == 0) {
     VulkanHarness vulkan;
-    RunCase(&vulkan, ScalarMemRealtimeCapturedPlaceholder());
+    for (const auto &test : ScalarMemRealtimeCases()) {
+      RunCase(&vulkan, test);
+    }
     return 0;
   }
   if (argc == 2 && std::strcmp(argv[1], "--packed-integer-neg-only") == 0) {

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <optional>
 
 namespace Libs::Graphics::ShaderRecompiler::Spirv::Emitter {
@@ -879,6 +880,22 @@ uint32_t EmitGetShaderBase(ValueEmitContext& ctx) {
 	// Guest S_GETPC values stay shader-relative in SPIR-V, matching the runtime ABI. The
 	// runtime descriptor evaluator supplies the mapped shader base for host-side planning.
 	return ctx.Def(IR::Value(uint64_t {0}));
+}
+
+uint32_t EmitReadRealtimeClock(ValueEmitContext& ctx, const IR::Inst& inst) {
+	auto&      state  = ctx.state;
+	const auto period = state.profile.device_clock_period_ps;
+	if (period == 0u) {
+		ctx.Fail(inst, "requires shaderDeviceClock");
+	}
+	state.builder.RequireExtension("SPV_KHR_shader_clock");
+	state.builder.RequireCapability(spv::CapabilityShaderClockKHR);
+	const auto clock =
+	    Unary(state, spv::OpReadClockKHR, TypeU64(state), ConstantU32(state, spv::ScopeDevice));
+	// S_MEMREALTIME counts at 100 MHz. Shift the host clock by the most bits that keep its tick at
+	// most 15000 ps (2/3 of 100 MHz): 1 GHz shifts by 3 to 125 MHz; 100 MHz and slower stay.
+	const uint32_t shift = std::bit_width(7500u / period);
+	return EmitShiftRightLogical64(ctx, clock, IR::Value(shift));
 }
 
 void EmitUnreachable(ValueEmitContext& ctx, const IR::Inst& inst) {
