@@ -54,32 +54,10 @@ namespace Libs::Graphics {
 
 namespace {
 
-constexpr uint32_t GcrGl2MetadataInvalidate = 1u << 1u;
-constexpr uint32_t GcrGl0VectorInvalidate   = 1u << 2u;
-constexpr uint32_t GcrGl1Invalidate         = 1u << 3u;
-constexpr uint32_t GcrGl2Unshared           = 1u << 4u;
-constexpr uint32_t GcrGl2Invalidate         = 1u << 8u;
-constexpr uint32_t GcrGl2Writeback          = 1u << 9u;
-constexpr uint32_t GcrOrder012              = 1u << 10u;
-constexpr uint32_t GcrOrder210              = 2u << 10u;
-constexpr uint32_t GcrKnownMask             = GcrGl2MetadataInvalidate | GcrGl0VectorInvalidate |
-                                              GcrGl1Invalidate | GcrGl2Unshared | GcrGl2Invalidate |
-                                              GcrGl2Writeback | GcrOrder012 | GcrOrder210;
-constexpr uint32_t RegisterSelectorMask     = 0x70000000u;
+constexpr uint32_t RegisterSelectorMask = 0x70000000u;
 
 constexpr uint32_t NormalizeRegisterOffset(uint32_t raw_offset) {
 	return raw_offset & ~RegisterSelectorMask;
-}
-
-uint32_t ReleaseMemCacheActionFromGcr(uint32_t gcr_cntl) {
-	return ((gcr_cntl & GcrGl2Writeback) != 0 ? 0x38u : 0x00u);
-}
-
-void LogUnknownReleaseMemGcr(uint32_t gcr_cntl) {
-	const uint32_t unknown = (gcr_cntl & ~GcrKnownMask);
-	if (unknown != 0) {
-		LOGF("\t warning: release_mem uses unknown GCR bits: 0x%04" PRIx32 "\n", unknown);
-	}
 }
 
 } // namespace
@@ -2068,105 +2046,14 @@ KYTY_CP_OP_PARSER(CpOpPushMarker) {
 KYTY_CP_OP_PARSER(CpOpReleaseMem) {
 	KYTY_PROFILER_FUNCTION();
 
-	EXIT_NOT_IMPLEMENTED(cmd_id != 0xc0061060);
+	EXIT_NOT_IMPLEMENTED(cmd_id != 0xc0064900);
 
-	uint32_t eop_event_type     = buffer[0] & 0x3fu;
-	uint32_t event_index        = (buffer[0] >> 8u) & 0x7u;
-	uint32_t gcr_cntl           = (buffer[0] >> 12u) & 0xfffu;
-	uint32_t release_dst        = (buffer[1] >> 16u) & 0x3u;
-	uint32_t data_sel           = (buffer[1] >> 29u) & 0x7u;
-	uint32_t interrupt_selector = (buffer[1] >> 24u) & 0x7u;
-	auto*    dst_gpu_addr =
-	    reinterpret_cast<void*>(buffer[2] | (static_cast<uint64_t>(buffer[3]) << 32u));
-	uint64_t value                = buffer[4] | (static_cast<uint64_t>(buffer[5]) << 32u);
-	uint32_t interrupt_context_id = buffer[6] & 0x07ffffffu;
-
-	constexpr uint32_t ReleaseMemDstMemory = 0;
-	constexpr uint32_t ReleaseMemDstTcL2   = 1;
-	EXIT_NOT_IMPLEMENTED(release_dst != ReleaseMemDstMemory && release_dst != ReleaseMemDstTcL2);
-	EXIT_NOT_IMPLEMENTED(data_sel != 0 && data_sel != 1 && data_sel != 2 && data_sel != 3 &&
-	                     data_sel != 5);
-
-	LogUnknownReleaseMemGcr(gcr_cntl);
-
-	const bool gl2_writeback = ((gcr_cntl & GcrGl2Writeback) != 0);
-
-	auto trigger_interrupt = [&]() {
-		switch (interrupt_selector) {
-			case 0x00:
-			case 0x03: break;
-			case 0x01:
-			case 0x02:
-			case 0x04:
-				cp.TriggerEopEventAtEndOfPipe(interrupt_context_id);
-				cp.BufferFlush();
-				break;
-			default: EXIT("unknown release_mem interrupt selector\n");
-		}
-	};
-
-	// Cache actions only order GPU work, which the renderer's resource barriers already order.
-	if (data_sel == 0 || interrupt_selector == 4 ||
-	    (release_dst == ReleaseMemDstMemory && dst_gpu_addr == nullptr)) {
-		trigger_interrupt();
-
-		return 7;
-	}
-
-	auto cache_action = ReleaseMemCacheActionFromGcr(gcr_cntl);
-
-	if (data_sel == 1) {
-		eop_event_type    = 0x2f;
-		event_index       = 6;
-		auto event_source = 2u;
-
-		cp.WriteAtEndOfPipe32(eop_event_type, cache_action, event_index, event_source, dst_gpu_addr,
-		                      static_cast<uint32_t>(value), interrupt_selector,
-		                      interrupt_context_id);
-		if (interrupt_selector == 0x01 || interrupt_selector == 0x02) {
-			cp.BufferFlush();
-		}
-
-		return 7;
-	}
-
-	if (data_sel == 5) {
-		if (gl2_writeback) {
-			cache_action = 0;
-		}
-
-		eop_event_type    = 0x2f;
-		event_index       = 6;
-		auto event_source = 1u;
-
-		cp.WriteAtEndOfPipe32(eop_event_type, cache_action, event_index, event_source, dst_gpu_addr,
-		                      static_cast<uint32_t>(value), interrupt_selector,
-		                      interrupt_context_id);
-		if (interrupt_selector == 0x01) {
-			cp.BufferFlush();
-		}
-
-		return 7;
-	}
-
-	const bool keep_native_event_index =
-	    (eop_event_type == 0x04 && cache_action == 0x00) ||
-	    (eop_event_type == 0x2f && event_index == 0x06 && cache_action == 0x38);
-
-	if (data_sel == 2) {
-		if (!keep_native_event_index) {
-			event_index = 0;
-		}
-	} else {
-		EXIT_IF(data_sel != 3);
-		if (!keep_native_event_index) {
-			event_index = 0;
-		}
-		data_sel = 4;
-	}
-
-	cp.WriteAtEndOfPipe64(eop_event_type, cache_action, event_index, data_sel, dst_gpu_addr, value,
-	                      interrupt_selector, interrupt_context_id);
+	// The event type, cache actions and destination cache only order GPU work, which the renderer's
+	// resource barriers already order.
+	cp.ReleaseMem(
+	    (buffer[1] >> 29u) & 0x7u, (buffer[1] >> 24u) & 0x7u,
+	    reinterpret_cast<void*>((buffer[2] & ~0x3u) | (static_cast<uint64_t>(buffer[3]) << 32u)),
+	    buffer[4] | (static_cast<uint64_t>(buffer[5]) << 32u), buffer[6] & 0x07ffffffu);
 
 	return 7;
 }

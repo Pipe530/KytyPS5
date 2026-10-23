@@ -2943,7 +2943,7 @@ public:
             std::array<uint32_t, 8> packet{};
             const auto address = reinterpret_cast<uint64_t>(destination);
             const auto event_index = (action >= 0x2fu ? 6u : 5u);
-            packet[0] = KYTY_PM4(8, Pm4::IT_NOP, Pm4::R_RELEASE_MEM);
+            packet[0] = KYTY_PM4(8, Pm4::IT_RELEASE_MEM, 0);
             packet[1] = action | (event_index << 8u) | (gcr_cntl << 12u);
             packet[2] = (interrupt_selector << 24u) | (data_sel << 29u);
             packet[3] = static_cast<uint32_t>(address);
@@ -3075,16 +3075,34 @@ public:
       gpu.SendCommandSync([&] {
         processor->BufferInit();
 
-        const auto clock_before = Sync::ReadReferenceClock();
-        auto clock_release =
-            make_release_mem(3, 2, &release_label, UINT64_MAX, 0x04u);
-        Pm4Execution clock_execution;
-        Require("GpuCommandLane", "release reference clock with interrupt",
-                processor->Process(clock_execution, clock_release) ==
-                        Pm4ProcessResult::Complete &&
-                    release_label >= clock_before &&
-                    release_label <= Sync::ReadReferenceClock(),
-                "clock write with writeback and interrupt lost its data");
+        // Every end-of-pipe and end-of-shader action, with or without GL2
+        // writeback, writes each label size and splits for its interrupt.
+        for (const uint32_t action : {0x04u, 0x14u, 0x28u, 0x2bu, 0x2du, 0x2fu, 0x30u}) {
+          for (const uint32_t gcr : {0u, 1u << 9u}) {
+            for (const uint32_t data_sel : {1u, 2u, 3u}) {
+              release_label = 0;
+              const auto clock_before = Sync::ReadReferenceClock();
+              auto release = make_release_mem(data_sel, 2, &release_label,
+                                              0x1122334455667788ull, action, gcr);
+              release[3] |= 1u; // ADDRESS_LO starts at bit 2.
+              Pm4Execution release_execution;
+              const auto release_tick = gpu_scheduler.CurrentTick();
+              const auto release_result =
+                  processor->Process(release_execution, release);
+              bool label_written =
+                  release_label == (data_sel == 1 ? 0x55667788ull : 0x1122334455667788ull);
+              if (data_sel == 3) {
+                label_written = release_label >= clock_before &&
+                                release_label <= Sync::ReadReferenceClock();
+              }
+              Require("GpuCommandLane", "release with write-confirm interrupt",
+                      release_result == Pm4ProcessResult::Complete &&
+                          label_written &&
+                          gpu_scheduler.CurrentTick() == release_tick + 1,
+                      "an end-of-pipe action lost its label or interrupt split");
+            }
+          }
+        }
 
         for (const auto interrupt : {0u, 3u, 1u, 2u}) {
           release_label = 0;
@@ -3213,7 +3231,7 @@ public:
            void *destination, uint64_t value, uint32_t context_id) {
           std::array<uint32_t, 8> packet{};
           const auto address = reinterpret_cast<uint64_t>(destination);
-          packet[0] = KYTY_PM4(8, Pm4::IT_NOP, Pm4::R_RELEASE_MEM);
+          packet[0] = KYTY_PM4(8, Pm4::IT_RELEASE_MEM, 0);
           packet[1] = 0x28u | (5u << 8u);
           packet[2] = (interrupt_selector << 24u) | (data_selector << 29u);
           packet[3] = static_cast<uint32_t>(address);
@@ -49632,7 +49650,7 @@ void CheckPm4IndirectControlFlow(RenderContext &renderer) {
               disabled_commands[5] == KYTY_PM4(2, Pm4::IT_NOP, Pm4::R_ZERO) &&
               disabled_commands[6] == 0x68750123u &&
               release[0] == KYTY_PM4(8, Pm4::IT_NOP, Pm4::R_ZERO) &&
-              unpatched_commands[7] == KYTY_PM4(8, Pm4::IT_NOP, Pm4::R_RELEASE_MEM) &&
+              unpatched_commands[7] == 0xc0064900u &&
               Gen5::AgcGetPacketSize(disabled_commands.data()) == disabled_write.size() &&
               Gen5::AgcGetPacketSize(disabled_commands.data() + 5) == 2 &&
               Gen5::AgcGetPacketSize(release) == 8 &&
@@ -49647,6 +49665,27 @@ void CheckPm4IndirectControlFlow(RenderContext &renderer) {
           processor.Process(disabled_execution, disabled_commands) == Pm4ProcessResult::Complete &&
               returned == 0 && released == 0 && selected == 88,
           "a disabled packet still executed or hid the packet after it");
+  // Like the driver, the end-of-pipe patch helpers take only a native
+  // RELEASE_MEM, keep the address alignment bits and skip kSendIntCtx.
+  std::array<uint32_t, 8> patched{};
+  std::copy_n(unpatched_commands.begin() + 7, patched.size(), patched.begin());
+  patched[3] |= 1u;
+  const auto* label = reinterpret_cast<const volatile Gen5::Label*>(0x123456789abcdef7ull);
+  bool patch_helpers_match =
+      Gen5::AgcQueueEndOfPipeActionPatchAddress(patched.data(), label) == 0 &&
+      patched[3] == 0x9abcdef5u && patched[4] == 0x12345678u &&
+      Gen5::AgcQueueEndOfPipeActionPatchData(patched.data(), 0x1122334455667788ull) == 0 &&
+      patched[5] == 0x55667788u && patched[6] == 0x11223344u;
+  patched[2] |= 4u << 24u;
+  patch_helpers_match &= Gen5::AgcQueueEndOfPipeActionPatchAddress(patched.data(), nullptr) == 0 &&
+                         patched[3] == 0x9abcdef5u && patched[4] == 0x12345678u;
+  patched[0] = KYTY_PM4(8, Pm4::IT_NOP, 0x18);
+  patch_helpers_match &=
+      Gen5::AgcQueueEndOfPipeActionPatchAddress(patched.data(), label) ==
+          static_cast<int>(0x8a6c000cu) &&
+      Gen5::AgcQueueEndOfPipeActionPatchData(patched.data(), 0) == static_cast<int>(0x8a6c000cu);
+  Require(name, "end-of-pipe patch helpers", patch_helpers_match,
+          "RELEASE_MEM or its patch helpers diverged from the driver");
   const auto then_commands = write(&selected, 11);
   const auto else_commands = write(&selected, 33);
   const auto branch_suffix = write(&selected, 44);

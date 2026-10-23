@@ -631,18 +631,6 @@ void CommandProcessor::ProcessPm4(Pm4Execution& execution) {
 				     opcode, KYTY_PM4_R(packet_header), packet_dw,
 				     reinterpret_cast<uint64_t>(packet), packet_header);
 			}
-			if (opcode == Pm4::IT_NOP && KYTY_PM4_R(packet_header) == Pm4::R_RELEASE_MEM &&
-			    packet_dw >= 7) {
-				static std::atomic<uint32_t> log_count {0};
-				if (log_count.fetch_add(1) < 128) {
-					const auto dst = packet[3] | (static_cast<uint64_t>(packet[4]) << 32u);
-					const auto val = packet[5] | (static_cast<uint64_t>(packet[6]) << 32u);
-					LOGF("\t predicated skip: R_RELEASE_MEM dst=0x%016" PRIx64
-					     ", value=0x%016" PRIx64 ", action=0x%08" PRIx32
-					     ", gcr/data/int=0x%08" PRIx32 "\n",
-					     dst, val, packet[1], packet[2]);
-				}
-			}
 			cursor.offset_dw += packet_dw;
 			execution.m_made_progress = true;
 			continue;
@@ -948,192 +936,65 @@ void CommandProcessor::WaitFlipDone(uint32_t video_out_handle, uint32_t display_
 	}
 }
 
-template <typename T>
-void CommandProcessor::WriteAtEndOfPipe(uint32_t eop_event_type, uint32_t cache_action,
-                                        uint32_t event_index, uint32_t event_write_source,
-                                        void* dst_gpu_addr, T value, uint32_t interrupt_selector,
-                                        uint32_t interrupt_context_id) {
-	static_assert(sizeof(T) == sizeof(uint32_t) || sizeof(T) == sizeof(uint64_t));
-
-	auto& command = CurrentBuffer();
-
+void CommandProcessor::ReleaseMem(uint32_t data_sel, uint32_t interrupt_selector, void* address,
+                                  uint64_t data, uint32_t interrupt_context_id) {
 	if (GraphicsRunDebugDumpEnabled()) {
-		const auto bits      = static_cast<unsigned>(sizeof(T) * 8u);
-		const auto log_width = static_cast<int>(sizeof(T) * 2u);
+		LOGF("CommandProcessor::ReleaseMem()\n"
+		     "\t data_sel           = %" PRIu32 "\n"
+		     "\t interrupt_selector = %" PRIu32 "\n"
+		     "\t address            = 0x%016" PRIx64 "\n"
+		     "\t data               = 0x%016" PRIx64 "\n"
+		     "\t interrupt_context  = 0x%08" PRIx32 "\n",
+		     data_sel, interrupt_selector, reinterpret_cast<uint64_t>(address), data,
+		     interrupt_context_id);
+	}
 
-		LOGF("CommandProcessor::WriteAtEndOfPipe%u()\n"
-		     "\t eop_event_type      = 0x%08" PRIx32 "\n"
-		     "\t cache_action        = 0x%08" PRIx32 "\n"
-		     "\t event_index         = 0x%08" PRIx32 "\n"
-		     "\t event_write_source  = 0x%08" PRIx32 "\n"
-		     "\t interrupt_selector  = 0x%08" PRIx32 "\n"
-		     "\t interrupt_context   = 0x%08" PRIx32 "\n"
-		     "\t dst_gpu_addr        = 0x%016" PRIx64 "\n"
-		     "\t value               = 0x%0*" PRIx64 "\n",
-		     bits, eop_event_type, cache_action, event_index, event_write_source,
-		     interrupt_selector, interrupt_context_id, reinterpret_cast<uint64_t>(dst_gpu_addr),
-		     log_width, static_cast<uint64_t>(value));
+	// QueuedInterrupt: kNone, kOnly, kAfterWriteConfirm, kDataAfterWriteConfirm, kSendIntCtx.
+	EXIT_NOT_IMPLEMENTED(interrupt_selector > 4);
+	const bool interrupt = (interrupt_selector != 0 && interrupt_selector != 3);
+	// kSendIntCtx has no label, and kOnly writes none on graphics queues.
+	if (address == nullptr || interrupt_selector == 4 ||
+	    (interrupt_selector == 1 && !IsAsyncComputeQueue())) {
+		data_sel = 0;
+	}
+	if (data_sel == 0 && !interrupt) {
+		return;
 	}
 
 	// Dumped occlusion counters are written before any end-of-pipe signal reaches the guest.
 	m_renderer.GetOcclusionQueries().Publish();
 
-	bool with_interrupt = false;
-	switch (interrupt_selector) {
-		case 0x00:
-		case 0x03: with_interrupt = false; break;
-		case 0x01:
-			if (!IsAsyncComputeQueue()) {
-				TriggerEopEventAtEndOfPipe(interrupt_context_id);
-				return;
-			}
-			with_interrupt = true;
+	// EndOfPipeData: kNone, kImmediate32b, kImmediate64b, kRefClk; 5 reads GDS.
+	switch (data_sel) {
+		case 0: break;
+		case 1: {
+			const auto value = static_cast<uint32_t>(data);
+			std::memcpy(address, &value, sizeof(value));
 			break;
-		case 0x02: with_interrupt = true; break;
-		default: EXIT("unknown interrupt_selector\n");
-	}
-
-	auto write32 = [&] {
-		auto* dst  = static_cast<uint32_t*>(dst_gpu_addr);
-		auto  data = static_cast<uint32_t>(value);
-		EXIT_IF(dst == nullptr);
-		(void)command.Handle();
-		std::memcpy(dst, &data, sizeof(data));
-
-		if (with_interrupt) {
-			TriggerEopEventAtEndOfPipe(interrupt_context_id);
 		}
-	};
-
-	switch (event_write_source) {
-		case 0x01:
-			if constexpr (sizeof(T) == sizeof(uint32_t)) {
-				if (eop_event_type == 0x2f && cache_action == 0x00 && event_index == 0x06) {
-					auto* dst = static_cast<uint32_t*>(dst_gpu_addr);
-					SynchronizeGpu();
-					Sync::ReadGds(*m_renderer.GetBufferCache().GetGdsBuffer(), dst, value & 0xffffu,
-					              value >> 16u);
-					if (with_interrupt) {
-						m_renderer.TriggerInterrupt(m_interrupt_event_id, interrupt_context_id);
-					}
-					return;
-				}
+		case 3: data = Sync::ReadReferenceClock(); [[fallthrough]];
+		case 2: std::memcpy(address, &data, sizeof(data)); break;
+		case 5: {
+			GetScheduler().Finish();
+			const auto gds = static_cast<uint32_t>(data);
+			Sync::ReadGds(*m_renderer.GetBufferCache().GetGdsBuffer(),
+			              static_cast<uint32_t*>(address), gds & 0xffffu, gds >> 16u);
+			if (interrupt) {
+				// The GPU is idle, so the interrupt needs no fence.
+				m_renderer.TriggerInterrupt(m_interrupt_event_id, interrupt_context_id);
 			}
-			break;
-		case 0x02:
-		case 0x04:
-			if constexpr (sizeof(T) == sizeof(uint32_t)) {
-				if (event_write_source == 0x02 && eop_event_type == 0x2f && event_index == 0x06) {
-					switch (cache_action) {
-						case 0x00:
-						case 0x38: write32(); return;
-						default: break;
-					}
-				}
-			} else {
-				if (event_write_source == 0x04) {
-					value = Sync::ReadReferenceClock();
-				}
-				auto write64 = [&] {
-					auto* dst = static_cast<uint64_t*>(dst_gpu_addr);
-					EXIT_IF(dst == nullptr);
-					(void)command.Handle();
-					std::memcpy(dst, &value, sizeof(value));
-
-					if (with_interrupt) {
-						TriggerEopEventAtEndOfPipe(interrupt_context_id);
-					}
-				};
-
-				switch (cache_action) {
-					case 0x00:
-						switch (eop_event_type) {
-							case 0x04:
-								if (event_index == 0x05) {
-									write64();
-									return;
-								}
-								break;
-							case 0x14:
-							case 0x28:
-							case 0x2f:
-								if (event_index == 0x00) {
-									write64();
-									return;
-								}
-								break;
-							case 0x2b:
-							case 0x2d:
-							case 0x30:
-								if (event_index == 0x00 && !with_interrupt) {
-									write64();
-									return;
-								}
-								break;
-							default: break;
-						}
-						break;
-					case 0x38:
-						switch (eop_event_type) {
-							case 0x04:
-							case 0x14:
-							case 0x28:
-								if (event_index == 0x00) {
-									write64();
-									return;
-								}
-								break;
-							case 0x2b:
-							case 0x2d:
-								if (event_index == 0x00 && !with_interrupt) {
-									write64();
-									return;
-								}
-								break;
-							case 0x2f:
-								if (event_index == 0x06 && !with_interrupt) {
-									write64();
-									return;
-								}
-								break;
-							default: break;
-						}
-						break;
-					default: break;
-				}
-			}
-			break;
-		default: break;
+			return;
+		}
+		default: EXIT("unknown release_mem data selector: %" PRIu32 "\n", data_sel);
 	}
 
-	EXIT("unknown event type\n");
-}
-
-void CommandProcessor::WriteAtEndOfPipe32(uint32_t eop_event_type, uint32_t cache_action,
-                                          uint32_t event_index, uint32_t event_write_source,
-                                          void* dst_gpu_addr, uint32_t value,
-                                          uint32_t interrupt_selector,
-                                          uint32_t interrupt_context_id) {
-	WriteAtEndOfPipe(eop_event_type, cache_action, event_index, event_write_source, dst_gpu_addr,
-	                 value, interrupt_selector, interrupt_context_id);
-}
-
-void CommandProcessor::WriteAtEndOfPipe64(uint32_t eop_event_type, uint32_t cache_action,
-                                          uint32_t event_index, uint32_t event_write_source,
-                                          void* dst_gpu_addr, uint64_t value,
-                                          uint32_t interrupt_selector,
-                                          uint32_t interrupt_context_id) {
-	WriteAtEndOfPipe(eop_event_type, cache_action, event_index, event_write_source, dst_gpu_addr,
-	                 value, interrupt_selector, interrupt_context_id);
-}
-
-void CommandProcessor::TriggerEopEventAtEndOfPipe(uint32_t interrupt_context_id) {
-	m_renderer.GetOcclusionQueries().Publish();
-	(void)CurrentBuffer().Handle();
-	GetScheduler().DeferPriorityOperation(
-	    [&renderer = m_renderer, event_id = m_interrupt_event_id, interrupt_context_id] {
-		    renderer.TriggerInterrupt(event_id, interrupt_context_id);
-	    });
+	if (interrupt) {
+		GetScheduler().DeferPriorityOperation(
+		    [&renderer = m_renderer, event_id = m_interrupt_event_id, interrupt_context_id] {
+			    renderer.TriggerInterrupt(event_id, interrupt_context_id);
+		    });
+		BufferFlush();
+	}
 }
 
 void CommandProcessor::TriggerEvent(uint32_t event_type, uint32_t event_index,
@@ -1243,10 +1104,6 @@ void CommandProcessor::PrepareCpuFlip(uint64_t request_id) {
 	GetScheduler().DeferPriorityOperation(
 	    [this, request_id] { m_renderer.GetVideoOut().CompleteFlip(request_id); });
 	GetScheduler().Flush();
-}
-
-void CommandProcessor::SynchronizeGpu() {
-	GetScheduler().Finish();
 }
 
 bool GuestGpu::IsGpuThread() noexcept {
