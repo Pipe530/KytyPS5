@@ -429,12 +429,6 @@ TextureCache::ImageIds TextureCache::FindImagesInRegion(uint64_t address, uint64
 		return {};
 	}
 
-	uint32_t query_epoch = ++m_image_query_epoch;
-	if (query_epoch == 0) {
-		m_slot_images.ForEach([](ImageId, const Image& image) { image.query_epoch = 0; });
-		query_epoch = ++m_image_query_epoch;
-	}
-
 	ImageIds result;
 	ForEachPage(address, size, [&](uint64_t page) {
 		const auto* owners = m_image_page_table.Find(page);
@@ -442,19 +436,17 @@ TextureCache::ImageIds TextureCache::FindImagesInRegion(uint64_t address, uint64
 			return;
 		}
 		owners->ForEach([&](ImageId id) {
-			auto* image = m_slot_images.try_get(id);
-			if (image == nullptr) {
+			const auto& image = m_slot_images[id];
+			if (image.picked || !image.Overlaps(address, size, page_overlap)) {
 				return;
 			}
-			if (image->query_epoch == query_epoch) {
-				return;
-			}
-			image->query_epoch = query_epoch;
-			if (image->Overlaps(address, size, page_overlap)) {
-				result.push_back(id);
-			}
+			image.picked = true;
+			result.push_back(id);
 		});
 	});
+	for (const auto id: result) {
+		m_slot_images[id].picked = false;
+	}
 	return result;
 }
 

@@ -331,16 +331,6 @@ struct TextureCacheTestAccess {
     return count;
   }
 
-  static void SetQueryEpoch(TextureCache &cache, uint32_t epoch) {
-    std::lock_guard lock(cache.m_lock);
-    cache.m_image_query_epoch = epoch;
-  }
-
-  static uint32_t QueryEpoch(TextureCache &cache) {
-    std::lock_guard lock(cache.m_lock);
-    return cache.m_image_query_epoch;
-  }
-
   static ImageId InsertImage(TextureCache &cache, const ImageInfo &info) {
     std::lock_guard lock(cache.m_lock);
     return cache.InsertImage(info);
@@ -6063,13 +6053,6 @@ public:
                   large_owner) == 0,
               "large image unregister left coarse memberships behind");
 
-      TextureCacheTestAccess::SetQueryEpoch(texture_cache, UINT32_MAX);
-      const auto wrap_results = TextureCacheTestAccess::FindImages(
-          texture_cache, base, sizeof(initial), false);
-      Require(name, "page-owner query epoch wrap",
-              IsOnlyImage(wrap_results, first) &&
-                  TextureCacheTestAccess::QueryEpoch(texture_cache) == 1,
-              "query deduplication failed while wrapping its epoch");
 
       auto &image = texture_cache.GetImage(first);
       constexpr uint32_t final_sampled_value = 0x88776655u;
