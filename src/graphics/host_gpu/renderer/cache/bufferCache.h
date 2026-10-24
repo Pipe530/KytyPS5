@@ -95,10 +95,7 @@ public:
 private:
 	friend struct BufferCacheTestAccess;
 
-	bool IsBufferInvalid(BufferId id) const {
-		const auto* buffer = m_slot_buffers.try_get(id);
-		return buffer == nullptr || buffer->is_deleted;
-	}
+	bool IsBufferInvalid(BufferId id) const { return !id || m_slot_buffers[id].is_deleted; }
 
 	using BufferMap = std::map<uint64_t, BufferId>;
 	struct OverlapResult {

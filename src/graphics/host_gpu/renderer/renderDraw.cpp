@@ -474,9 +474,8 @@ RenderState RenderExecutor::AcquireRenderTargets(CommandBuffer& buffer, RenderCo
 	for (uint32_t i = 0; i < color_count; i++) {
 		auto& target = colors[i];
 		EXIT_IF(!target.image_id);
-		const auto owner = cache.m_slot_images.try_get(target.image_id);
-		if (owner == nullptr || (!owner->registered && !owner->info.data.Empty()) ||
-		    owner->binding.needs_rebind) {
+		const auto& owner = cache.m_slot_images[target.image_id];
+		if ((!owner.registered && !owner.info.data.Empty()) || owner.binding.needs_rebind) {
 			EXIT("color target changed after render-state discovery\n");
 		}
 		const auto image_view = cache.FindRenderTarget(target.image_id, target.desc);
@@ -502,8 +501,8 @@ RenderState RenderExecutor::AcquireRenderTargets(CommandBuffer& buffer, RenderCo
 		attachment.image_layout = layout;
 	}
 	if (depth.image_id) {
-		const auto owner = cache.m_slot_images.try_get(depth.image_id);
-		if (owner == nullptr || !owner->registered || owner->binding.needs_rebind) {
+		const auto& owner = cache.m_slot_images[depth.image_id];
+		if (!owner.registered || owner.binding.needs_rebind) {
 			EXIT("depth target changed after render-state discovery\n");
 		}
 		const auto  image_view = cache.FindDepthTarget(depth.image_id, depth.desc);

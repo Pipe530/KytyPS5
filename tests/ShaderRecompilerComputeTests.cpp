@@ -4317,12 +4317,6 @@ public:
                   BufferCacheTestAccess::PageOwner(
                       cache, index_begin + 2 * index_page) == index_bridge,
               "bridging acquisition did not publish its merged Buffer range");
-      scheduler.Finish();
-      constexpr uint64_t recycled_offset = index_offset + 4 * index_page;
-      const auto recycled = cache.FindBuffer(base + recycled_offset + 0x100,
-                                             sizeof(uint32_t));
-      Require(name, "slot reuse", recycled == index_left || recycled == index_right,
-              "retired Buffer slot was not reused");
       const auto [resolved_left, resolved_left_offset] = cache.ObtainBuffer(
           index_begin + 0x100, sizeof(uint32_t), true, false, index_left);
       const auto [resolved_right, resolved_right_offset] =
@@ -4333,6 +4327,12 @@ public:
                   resolved_right == resolved_left &&
                   resolved_left_offset != resolved_right_offset,
               "saved descriptor IDs did not resolve through the merged owner");
+      scheduler.Finish();
+      constexpr uint64_t recycled_offset = index_offset + 4 * index_page;
+      const auto recycled = cache.FindBuffer(base + recycled_offset + 0x100,
+                                             sizeof(uint32_t));
+      Require(name, "slot reuse", recycled == index_left || recycled == index_right,
+              "retired Buffer slot was not reused");
 
       constexpr uint64_t stream_page = BufferCache::CACHING_PAGESIZE;
       constexpr uint64_t stream_leap = stream_page * 128;
