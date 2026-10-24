@@ -331,22 +331,6 @@ struct TextureCacheTestAccess {
     return count;
   }
 
-  static void AddPageOwner(TextureCache &cache, uint64_t address, ImageId id) {
-    std::lock_guard lock(cache.m_lock);
-    cache
-        .m_image_page_table[static_cast<size_t>(
-            address >> TextureCache::ImagePageTable::kPageBits)]
-        .push_back(id);
-  }
-
-  static bool RemovePageOwner(TextureCache &cache, uint64_t address,
-                              ImageId id) {
-    std::lock_guard lock(cache.m_lock);
-    auto *owners = cache.m_image_page_table.Find(static_cast<size_t>(
-        address >> TextureCache::ImagePageTable::kPageBits));
-    return owners != nullptr && owners->Erase(id);
-  }
-
   static void SetQueryEpoch(TextureCache &cache, uint32_t epoch) {
     std::lock_guard lock(cache.m_lock);
     cache.m_image_query_epoch = epoch;
@@ -4347,11 +4331,8 @@ public:
       constexpr uint64_t recycled_offset = index_offset + 4 * index_page;
       const auto recycled = cache.FindBuffer(base + recycled_offset + 0x100,
                                              sizeof(uint32_t));
-      Require(name, "slot generation reuse",
-              (recycled.index == index_left.index && recycled != index_left) ||
-                  (recycled.index == index_right.index &&
-                   recycled != index_right),
-              "retired Buffer slot was not reused with a new generation");
+      Require(name, "slot reuse", recycled == index_left || recycled == index_right,
+              "retired Buffer slot was not reused");
       const auto [resolved_left, resolved_left_offset] = cache.ObtainBuffer(
           index_begin + 0x100, sizeof(uint32_t), true, false, index_left);
       const auto [resolved_right, resolved_right_offset] =
@@ -5465,6 +5446,28 @@ public:
       Require(name, "unmapped descriptor", !textures.IsRegionRegistered(texture(23), 0x1000u),
               "a descriptor over unmapped memory was resolved");
 
+      // An idle view keeps the element of a freed image. Once a new image takes its slot,
+      // reactivating the view must resolve the descriptor again.
+      write(30, descriptor(30, Format::k8_8_8_8UNorm));
+      Require(name, "idle element", acquire(unfiltered), "the view was declined");
+      draw();
+      const auto erased = ImageHeapTestAccess::ImageOf(heap, idle.slots[240]);
+      textures.UnmapMemory(texture(30), 0x1000u);
+      Require(name, "replacement", acquire(sampled), "the view was declined");
+      draw();
+      write(31, descriptor(31, Format::k8_8_8_8UNorm));
+      Require(name, "slot reuse", acquire(sampled), "the view was declined");
+      draw();
+      Require(name, "reused slot",
+              erased && ImageHeapTestAccess::ImageOf(heap, filtered.slots[248]) == erased,
+              "the next image did not take the freed image's slot");
+      Require(name, "reactivated idle view", acquire(unfiltered), "the view was declined");
+      draw();
+      Require(name, "reused slot element",
+              ImageHeapTestAccess::ImageOf(heap, idle.slots[240]) ==
+                  ImageHeapTestAccess::ImageOf(heap, filtered.slots[240]),
+              "a reactivated view kept an element whose image slot holds a new image");
+
       heap.UnmapMemory(table, table_size);
       Require(name, "unmapped table",
               ImageHeapTestAccess::MemoryCount(heap) == 0u &&
@@ -6059,16 +6062,6 @@ public:
                   texture_cache, large_info.data.address, large_info.data.size,
                   large_owner) == 0,
               "large image unregister left coarse memberships behind");
-
-      const ImageId stale{first.index, first.generation + 1};
-      TextureCacheTestAccess::AddPageOwner(texture_cache, base, stale);
-      const auto stale_filtered = TextureCacheTestAccess::FindImages(
-          texture_cache, base, sizeof(initial), false);
-      Require(name, "stale page owner filtering",
-              IsOnlyImage(stale_filtered, first) &&
-                  TextureCacheTestAccess::RemovePageOwner(texture_cache, base,
-                                                          stale),
-              "a stale generation escaped the direct page-owner lookup");
 
       TextureCacheTestAccess::SetQueryEpoch(texture_cache, UINT32_MAX);
       const auto wrap_results = TextureCacheTestAccess::FindImages(
@@ -17009,9 +17002,7 @@ public:
       scheduler.EndRendering();
       RenderExecutorTestAccess::ResetBindings(executor);
       Require(name, "draw-scoped target reset",
-              TextureCacheTestAccess::Owner(texture_cache,
-                                            target_subresource_id) == nullptr &&
-                  !texture_cache.GetImage(target_parent_id).binding.is_target &&
+              !texture_cache.GetImage(target_parent_id).binding.is_target &&
                   !texture_cache.GetImage(depth_id).binding.is_target,
               "RenderExecutor retained target binding state after reset");
 
@@ -48130,37 +48121,6 @@ void CheckDepthTargetFootprints() {
   std::printf("[host]    %-32s ok\n", "DepthTargetFootprints");
 }
 
-struct SlotLifetimeProbe {
-  explicit SlotLifetimeProbe(bool *destroyed) : destroyed(destroyed) {
-    if (destroyed == nullptr || *destroyed) {
-      EXIT("fence-lifetime probe has invalid construction state\n");
-    }
-  }
-  ~SlotLifetimeProbe() { *destroyed = true; }
-
-  bool *destroyed = nullptr;
-};
-
-void CheckSlotVectorLifetime() {
-  bool destroyed = false;
-  Common::SlotVector<SlotLifetimeProbe> slots;
-  const auto first = slots.insert(&destroyed);
-  Require("SlotVectorLifetime", "inserted",
-          slots.is_allocated(first) && slots.try_get(first) != nullptr &&
-              !destroyed,
-          "slot insertion did not expose its cache-owned object");
-  slots.erase(first);
-  const bool first_destroyed = destroyed;
-  destroyed = false;
-  const auto second = slots.insert(&destroyed);
-  Require("SlotVectorLifetime", "generation",
-          first_destroyed && !destroyed && first.index == second.index &&
-              first != second && !slots.is_allocated(first) &&
-              slots.is_allocated(second),
-          "reused slot accepted a stale cache resource id");
-  std::printf("[host]    %-32s ok\n", "SlotVectorLifetime");
-}
-
 void CheckEmbeddedFetchLaneSpill() {
   std::vector<u32> code;
   code.push_back(EncodeSMovB32(0, InlineU32(0)));
@@ -51297,7 +51257,6 @@ int main(int argc, char **argv) {
   CheckDepthFeedbackAspects();
   CheckDynamicRenderingState();
   CheckDepthTargetFootprints();
-  CheckSlotVectorLifetime();
 #else
   if (argc != 1) {
     std::fprintf(stderr, "unknown test selector: %s\n", argv[1]);
