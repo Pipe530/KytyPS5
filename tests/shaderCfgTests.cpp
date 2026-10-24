@@ -1906,6 +1906,13 @@ void TestVertexBufferGrouping() {
               input.resources[2].Base48() == input.buffers[0].addr,
           "a later lower-address attribute or changed table left stale vertex offsets");
   }
+  // The vertex table metadata is parsed when the shader is mapped.
+  user_data.direct_resource_count = 0;
+  (void)PrepareProgram(regs, HW::Context{}, HW::UserConfig{}, input);
+  Check(input.fetch_attrib_reg == 2, "a draw reread the vertex metadata of a mapped shader");
+  ShaderMapUserData(regs.es_regs.data_addr, mapped);
+  (void)PrepareProgram(regs, HW::Context{}, HW::UserConfig{}, input);
+  Check(!input.fetch_embedded, "remapping a shader kept its previous vertex metadata");
 }
 
 void TestNggVertexEntryState() {
